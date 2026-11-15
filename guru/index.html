@@ -408,6 +408,7 @@ table.tbl{width:100%;border-collapse:collapse}
     <div class="page-head">
       <div><h1>Bank soal</h1><p>Kumpulan soal per mata pelajaran. Satu bank soal bisa dipakai di banyak jadwal ujian.</p></div>
       <div class="row">
+        <button class="btn" @click="gf={url:'',mapel:S.user.mapel[0]||S.config.mapel[0]||'',tingkat:S.config.tingkat[0]||'',tahap:'isi',pesan:'',n:0,total:0}">Impor Google Form</button>
         <button class="btn" @click="pilihImpor">Impor file JSON</button>
         <button class="btn btn-primary" @click="baru={judul:'',mapel:S.user.mapel[0]||'',tingkat:S.config.tingkat[0]||''}">Buat bank soal</button>
       </div>
@@ -423,7 +424,7 @@ table.tbl{width:100%;border-collapse:collapse}
       <div v-else class="tbl-wrap"><table class="tbl">
         <thead><tr><th>Judul</th><th>Mapel</th><th>Tingkat</th><th class="num">Soal</th><th class="num">Bobot</th><th v-if="S.user.role==='admin'">Pemilik</th><th>Diubah</th><th></th></tr></thead>
         <tbody><tr v-for="b in tampil" :key="b.id">
-          <td><a :href="'#/editor/'+b.id"><b>{{ b.judul }}</b></a></td>
+          <td><a :href="'#/editor/'+b.id"><b>{{ b.judul }}</b></a> <span class="chip chip-biru" v-if="b.gform" title="Jawaban siswa ikut dikirim ke Google Form">Google Form</span></td>
           <td>{{ b.mapel }}</td><td>{{ b.tingkat }}</td><td class="num">{{ b.jumlahSoal }}</td><td class="num">{{ b.totalBobot }}</td>
           <td v-if="S.user.role==='admin'">{{ b.guruNama }}</td>
           <td class="small muted">{{ relatif(b.diubah) }}</td>
@@ -447,6 +448,41 @@ table.tbl{width:100%;border-collapse:collapse}
         </div>
         <div class="modal-foot"><button type="button" class="btn" @click="baru=null">Batal</button><button class="btn btn-primary" :disabled="sibuk">Buat dan mulai menyusun</button></div>
       </form>
+    </div>
+
+    <div class="modal-bg" v-if="gf" @click.self="gf.tahap==='isi' && (gf=null)">
+      <div class="modal lebar">
+        <div class="modal-head"><div><h2>Impor dari Google Form</h2><p class="muted small">Pertanyaan form menjadi soal CBT. Saat siswa selesai, jawabannya juga dikirim ke Google Form tersebut.</p></div><button class="x" @click="gf=null" :disabled="gf.tahap==='proses'">×</button></div>
+        <form class="modal-body" v-if="gf.tahap==='isi'" id="f-gf" @submit.prevent="imporGForm">
+          <label class="field"><span>Link Google Form (link untuk responden)</span><input v-model="gf.url" required placeholder="https://forms.gle/… atau https://docs.google.com/forms/d/e/…/viewform" v-focus></label>
+          <div class="grid2">
+            <label class="field"><span>Mata pelajaran</span><select v-model="gf.mapel"><option v-for="m in S.config.mapel" :key="m">{{ m }}</option></select></label>
+            <label class="field"><span>Tingkat</span><select v-model="gf.tingkat"><option v-for="t in S.config.tingkat" :key="t">{{ t }}</option></select></label>
+          </div>
+          <div class="hint" style="margin:4px 0 0">
+            <b>Periksa setelan form sebelum impor</b><br>
+            Buka form di Google Forms → <b>Setelan</b>, lalu pastikan:<br>
+            • <b>Batasi ke 1 tanggapan</b> dan <b>Batasi ke pengguna di organisasi</b> mati (keduanya mewajibkan login Google, sehingga CBT tidak bisa mengirim jawaban).<br>
+            • <b>Kumpulkan alamat email</b> diatur ke <b>Jangan kumpulkan</b>.<br>
+            • Form dalam keadaan <b>Menerima tanggapan</b>.<br>
+            Pertanyaan “Nama”, “NIS”, dan “Kelas” otomatis diisi dari data siswa. Kunci jawaban kuis tidak ikut terbaca, jadi tambahkan kunci di editor jika CBT juga harus menilai.
+          </div>
+        </form>
+        <div class="modal-body" v-else-if="gf.tahap==='proses'">
+          <p class="lede">{{ gf.pesan }}</p>
+          <div class="bar" v-if="gf.total" style="margin-top:10px"><i :style="{width:(gf.n/gf.total*100)+'%'}"></i></div>
+        </div>
+        <div class="modal-body" v-else>
+          <p class="lede"><b>{{ gf.bank.soal.length }}</b> soal dari “{{ gf.bank.gform.judul }}” tersimpan sebagai bank soal <b>{{ gf.bank.judul }}</b>.</p>
+          <p style="margin-top:8px" v-if="gf.identitas.length">Diisi otomatis dari data siswa: <template v-for="(x,i) in gf.identitas" :key="x.entry"><span v-if="i">, </span>“{{ x.judul }}”</template>.</p>
+          <p style="margin-top:8px" v-else>Tidak ada pertanyaan nama/NIS/kelas yang dikenali. Jika form punya pertanyaan identitas dengan judul lain, buka soalnya di editor lalu pilih “Jadikan isian otomatis”.</p>
+          <div class="warn-bar" v-for="(p,i) in gf.peringatan" :key="i" style="margin-top:10px">{{ p }}</div>
+        </div>
+        <div class="modal-foot">
+          <template v-if="gf.tahap==='isi'"><button type="button" class="btn" @click="gf=null">Batal</button><button class="btn btn-primary" form="f-gf">Impor soal</button></template>
+          <template v-else-if="gf.tahap==='hasil'"><button type="button" class="btn" @click="gf=null">Tutup</button><a class="btn btn-primary" :href="'#/editor/'+gf.bank.id">Buka bank soal</a></template>
+        </div>
+      </div>
     </div>
   </div>
 </script>
@@ -483,6 +519,18 @@ table.tbl{width:100%;border-collapse:collapse}
             </div>
             <p class="small muted" style="margin-top:12px">Bulatan hitam: soal lengkap. Titik merah: masih ada yang kurang. Tempel gambar dengan Ctrl+V.</p>
           </div>
+          <div class="panel panel-pad" v-if="bank.gform" style="margin-top:12px">
+            <h3>Google Form</h3>
+            <p class="small" style="margin:4px 0 0">Terhubung ke <a :href="bank.gform.url" target="_blank" rel="noopener">{{ bank.gform.judul }}</a>. Jawaban siswa dikirim ke form ini saat selesai.</p>
+            <div class="small" style="font-weight:600;margin:12px 0 6px">Diisi otomatis dari data siswa</div>
+            <div v-for="x in bank.gform.identitas" :key="x.entry" class="row" style="gap:6px;margin-bottom:6px;flex-wrap:nowrap">
+              <span class="small" style="flex:1;min-width:0">{{ x.judul }}</span>
+              <select class="input" v-model="x.isi" style="width:auto;height:30px;font-size:13px"><option value="nama">Nama</option><option value="nis">NIS</option><option value="kelas">Kelas</option><option value="namakelas">Nama - Kelas</option><option value="namanis">Nama - NIS</option><option value="">Biarkan kosong</option></select>
+            </div>
+            <p class="small muted" v-if="!bank.gform.identitas.length">Belum ada. Buka soal isian seperti “Nama”, lalu pilih “Jadikan isian otomatis”.</p>
+            <p class="small muted" style="margin-top:8px">Soal tanpa kunci tidak dinilai CBT, tetapi jawabannya tetap dikirim ke Google Form.</p>
+            <button class="btn-link small" style="margin-top:6px" @click="putusForm">Putuskan dari Google Form</button>
+          </div>
         </div>
         <div>
           <div v-if="!bank.soal.length" class="panel empty"><b>Bank soal masih kosong</b>Pilih jenis soal di kiri, atau gunakan “Impor cepat” untuk menempel banyak soal pilihan ganda sekaligus.</div>
@@ -494,7 +542,7 @@ table.tbl{width:100%;border-collapse:collapse}
             <soal-view :soal="soalPratinjau" v-model="coba[bank.soal[sel].id]"></soal-view>
           </div>
           <soal-form v-else :s="bank.soal[sel]" :no="sel+1" :total="bank.soal.length" :key="bank.soal[sel].id"
-            @naik="pindah(-1)" @turun="pindah(1)" @duplikat="duplikatSoal" @hapus="hapusSoal" @ganti-tipe="gantiTipe"></soal-form>
+            @naik="pindah(-1)" @turun="pindah(1)" @duplikat="duplikatSoal" @hapus="hapusSoal" @ganti-tipe="gantiTipe" @jadi-identitas="jadiIdentitas"></soal-form>
         </div>
       </div>
     </template>
@@ -532,7 +580,7 @@ table.tbl{width:100%;border-collapse:collapse}
     <div class="sf-head">
       <span class="no">{{ no }}</span>
       <label class="field" style="margin:0;min-width:210px"><span>Jenis soal</span>
-        <select :value="s.tipe" @change="$emit('ganti-tipe', $event.target.value)"><option v-for="t in TIPE" :key="t.k" :value="t.k">{{ t.n }}</option></select>
+        <select :value="s.tipe" :disabled="!!s.gform" @change="$emit('ganti-tipe', $event.target.value)"><option v-for="t in TIPE" :key="t.k" :value="t.k">{{ t.n }}</option></select>
       </label>
       <label class="field" style="margin:0;width:90px"><span>Bobot</span><input type="number" min="0" step="0.5" v-model.number="s.bobot"></label>
       <div class="row" style="margin-left:auto;gap:4px">
@@ -543,6 +591,8 @@ table.tbl{width:100%;border-collapse:collapse}
       </div>
     </div>
     <div class="sf-body">
+      <div class="hint" v-if="s.gform" style="margin:0 0 14px">Dari Google Form<template v-if="s.gform.wajib"> · wajib diisi</template>. Jenis soal dan daftar pilihan mengikuti form; teksnya boleh dirapikan.
+        <template v-if="s.tipe==='isian' || s.tipe==='uraian'"><br><button class="btn-link small" @click="$emit('jadi-identitas')">Jadikan isian otomatis (nama/NIS/kelas siswa)</button></template></div>
       <div v-if="adaStimulus" class="field">
         <span>Teks bacaan / stimulus <button class="btn-link small" style="margin-left:8px" @click="s.stimulus='';adaStimulus=false">hapus</button></span>
         <teks-input v-model="s.stimulus" :rows="4" placeholder="Wacana, tabel data, atau cerita yang menjadi dasar soal"></teks-input>
@@ -573,10 +623,10 @@ table.tbl{width:100%;border-collapse:collapse}
             <div class="imgs" v-if="o.gambar"><div class="img-box"><img :src="o.gambar" alt=""><button @click="o.gambar=''">×</button></div></div></div>
           <div class="row" style="gap:2px">
             <button class="btn btn-sm btn-ghost" @click="unggahGambarOpsi(o)" title="Gambar untuk pilihan ini">Gambar</button>
-            <button class="btn btn-sm btn-ghost" @click="hapusOpsi(i)" :disabled="s.opsi.length<=2" title="Hapus pilihan">×</button>
+            <button class="btn btn-sm btn-ghost" @click="hapusOpsi(i)" :disabled="s.opsi.length<=2 || !!s.gform" title="Hapus pilihan">×</button>
           </div>
         </div>
-        <button class="btn btn-sm" @click="s.opsi.push({id:rid('o'),teks:'',gambar:''})" :disabled="s.opsi.length>=8">+ Tambah pilihan</button>
+        <button class="btn btn-sm" @click="s.opsi.push({id:rid('o'),teks:'',gambar:''})" :disabled="s.opsi.length>=8 || !!s.gform">+ Tambah pilihan</button>
       </div>
 
       <!-- Benar/Salah -->
@@ -823,7 +873,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <div class="panel panel-pad" style="margin-bottom:16px">
           <p class="lede">Dari <b>{{ d.peserta.length }}</b> peserta: <b>{{ hit.belum }}</b> belum mulai, <b>{{ hit.mengerjakan }}</b> sedang mengerjakan, <b>{{ hit.selesai }}</b> selesai.<template v-if="hit.melanggar"> <b>{{ hit.melanggar }}</b> siswa pernah keluar dari halaman ujian.</template></p>
           <div class="row" style="margin-top:10px">
-            <label class="check" style="margin:0"><input type="checkbox" v-model="auto"><span>Segarkan otomatis tiap 15 detik</span></label>
+            <label class="check" style="margin:0"><input type="checkbox" v-model="auto"><span>Segarkan otomatis tiap 20 detik</span></label>
             <span class="small muted">Diperbarui {{ fmtJamDetik(diperbarui) }}</span>
             <button class="btn btn-sm" @click="muat">Segarkan</button>
             <a class="btn btn-sm" :href="'#/hasil/'+d.ujian.id">Lihat hasil</a>
@@ -845,7 +895,8 @@ table.tbl{width:100%;border-collapse:collapse}
               <td class="num"><span :class="{'no-mark': p.pelanggaran}">{{ p.pelanggaran || '' }}</span></td>
               <td class="small tnum">
                 <template v-if="p.status==='mengerjakan'">mulai {{ fmtJam(p.mulai) }}<br><b>sisa {{ sisa(p) }}</b></template>
-                <template v-else-if="p.status==='selesai'">{{ fmtJam(p.selesai) }}<span v-if="p.nilai!==null"> · nilai <b>{{ p.nilai }}</b></span></template>
+                <template v-else-if="p.status==='selesai'">{{ fmtJam(p.selesai) }}<span v-if="p.nilai!==null && p.nilai!==undefined"> · nilai <b>{{ p.nilai }}</b></span>
+                  <span v-if="p.formStatus" class="chip" :class="gfChip(p.formStatus)[0]" style="margin-left:4px">Form {{ gfChip(p.formStatus)[1] }}</span></template>
               </td>
               <td class="act">
                 <menu-pop :items="aksi(p)" v-if="aksi(p).length"></menu-pop>
@@ -871,6 +922,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <div class="page-head">
           <div><a href="#/hasil" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ d.bank ? d.bank.judul : '' }} · {{ fmtTgl(d.ujian.mulai) }}</p></div>
           <div class="row">
+            <button class="btn" v-if="d.ujian.gform && belumTerkirim" @click="kirimUlangForm" :disabled="sibuk">Kirim ulang ke Google Form ({{ belumTerkirim }})</button>
             <button class="btn" @click="hitungUlang" title="Pakai kunci jawaban terbaru di bank soal">Hitung ulang nilai</button>
             <button class="btn" @click="sinkron">Kirim ke GitHub</button>
             <button class="btn btn-primary" @click="unduh" :disabled="!selesai.length">Unduh Excel</button>
@@ -884,9 +936,12 @@ table.tbl{width:100%;border-collapse:collapse}
 
         <template v-if="tab==='nilai'">
           <div class="panel panel-pad" style="margin-bottom:16px">
-            <p class="lede" v-if="selesai.length"><b>{{ selesai.length }}</b> dari {{ d.peserta.length }} peserta selesai. Rata-rata <b>{{ statistik.rata }}</b>, tertinggi <b>{{ statistik.maks }}</b>, terendah <b>{{ statistik.min }}</b>.
-              <template v-if="kkm"> <b>{{ statistik.tuntas }}</b> siswa mencapai KKM {{ kkm }}.</template>
-              <template v-if="jmlPerluKoreksi"> <b>{{ jmlPerluKoreksi }}</b> peserta masih menunggu koreksi uraian, nilainya belum final.</template></p>
+            <p class="lede" v-if="selesai.length"><b>{{ selesai.length }}</b> dari {{ d.peserta.length }} peserta selesai.
+              <template v-if="statistik.rata!==undefined">{{ ' ' }}Rata-rata <b>{{ statistik.rata }}</b>, tertinggi <b>{{ statistik.maks }}</b>, terendah <b>{{ statistik.min }}</b>.
+              <template v-if="kkm">{{ ' ' }}<b>{{ statistik.tuntas }}</b> siswa mencapai KKM {{ kkm }}.</template></template>
+              <template v-else> Belum ada soal berkunci, jadi nilai tidak dihitung. Tambahkan kunci di bank soal lalu klik “Hitung ulang nilai”.</template>
+              <template v-if="jmlPerluKoreksi">{{ ' ' }}<b>{{ jmlPerluKoreksi }}</b> peserta masih menunggu koreksi uraian, nilainya belum final.</template>
+              <template v-if="d.ujian.gform">{{ ' ' }}<b>{{ selesai.length - belumTerkirim }}</b> jawaban sudah tercatat di Google Form<template v-if="belumTerkirim">, <b>{{ belumTerkirim }}</b> belum</template>.</template></p>
             <p class="lede" v-else>Belum ada peserta yang menyelesaikan ujian ini.</p>
             <div class="row" style="margin-top:10px"><label class="small" style="display:flex;gap:8px;align-items:center">KKM <input class="input" type="number" v-model.number="kkm" style="width:80px;height:32px" min="0" max="100"></label></div>
           </div>
@@ -896,13 +951,14 @@ table.tbl{width:100%;border-collapse:collapse}
               <select class="input" v-model="fKelas"><option value="">Semua kelas</option><option v-for="k in d.ujian.kelas" :key="k">{{ k }}</option></select>
             </div>
             <div class="tbl-wrap"><table class="tbl">
-              <thead><tr><th>No</th><th class="sortable" @click="urut('nis')">NIS</th><th class="sortable" @click="urut('nama')">Nama</th><th class="sortable" @click="urut('kelas')">Kelas</th><th class="num sortable" @click="urut('nilai')">Nilai</th><th class="num">Skor</th><th class="num">Benar</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>No</th><th class="sortable" @click="urut('nis')">NIS</th><th class="sortable" @click="urut('nama')">Nama</th><th class="sortable" @click="urut('kelas')">Kelas</th><th class="num sortable" @click="urut('nilai')">Nilai</th><th class="num">Skor</th><th class="num">Benar</th><th>Status</th><th v-if="d.ujian.gform">Google Form</th><th></th></tr></thead>
               <tbody><tr v-for="(p,i) in tampil" :key="p.nis">
                 <td class="tnum muted">{{ i+1 }}</td><td class="tnum">{{ p.nis }}</td><td><b>{{ p.nama }}</b></td><td>{{ p.kelas }}</td>
-                <td class="num"><span class="nilai-big" v-if="p.hasil" :style="{color: kkm && p.hasil.nilai < kkm ? 'var(--merah)' : ''}">{{ p.hasil.nilai }}</span><span v-else class="muted">—</span></td>
+                <td class="num"><span class="nilai-big" v-if="p.hasil && p.hasil.nilai!==null" :style="{color: kkm && p.hasil.nilai < kkm ? 'var(--merah)' : ''}">{{ p.hasil.nilai }}</span><span v-else class="muted">—</span></td>
                 <td class="num small">{{ p.hasil ? p.hasil.skor + '/' + p.hasil.maks : '' }}</td>
-                <td class="num small">{{ p.hasil ? p.hasil.benar + '/' + p.hasil.jumlahSoal : '' }}</td>
+                <td class="num small">{{ p.hasil ? p.hasil.benar + '/' + (p.hasil.dinilai ?? p.hasil.jumlahSoal) : '' }}</td>
                 <td><status-peserta :s="p.status"></status-peserta> <span class="chip chip-kuning" v-if="p.hasil && p.hasil.perluKoreksi">perlu koreksi</span></td>
+                <td v-if="d.ujian.gform"><span v-if="p.formStatus" class="chip" :class="gfChip(p.formStatus)[0]" :title="p.formStatus==='terkirim' ? 'Tercatat ' + fmtWaktu(Date.parse(p.formInfo)) : p.formInfo">{{ gfChip(p.formStatus)[1] }}</span></td>
                 <td class="act"><button class="btn btn-sm" v-if="p.status==='selesai'" @click="detail=p">Detail</button></td>
               </tr></tbody>
             </table></div>
@@ -917,10 +973,11 @@ table.tbl{width:100%;border-collapse:collapse}
               <td class="tnum">{{ i+1 }}</td>
               <td style="max-width:300px" class="small">{{ polos(a.teks).slice(0,90) }}{{ polos(a.teks).length>90?'…':'' }}</td>
               <td class="small">{{ singkatTipe(a.tipe) }}</td>
-              <td class="num">{{ a.persenBenar }}%</td>
+              <template v-if="a.tidakDinilai"><td class="num muted">—</td><td class="num muted">—</td><td class="small muted">tanpa kunci</td><td class="num muted">—</td><td></td></template>
+              <template v-else><td class="num">{{ a.persenBenar }}%</td>
               <td class="num">{{ a.p }}</td><td><span class="chip" :class="a.pKelas">{{ a.pKat }}</span></td>
-              <td class="num">{{ a.d }}</td><td><span class="chip" :class="a.dKelas">{{ a.dKat }}</span></td>
-              <td><div class="distr" v-if="a.distr"><span v-for="x in a.distr" :key="x.h" :class="{k:x.kunci}" :title="x.h + ': ' + x.n + ' siswa'">{{ x.h }} {{ x.n }}</span></div><span v-else class="small muted">{{ a.menunggu ? a.menunggu + ' belum dikoreksi' : '' }}</span></td>
+              <td class="num">{{ a.d }}</td><td><span class="chip" :class="a.dKelas">{{ a.dKat }}</span></td></template>
+              <td><div class="distr" v-if="a.distr"><span v-for="x in a.distr" :key="x.h" :class="{k:x.kunci}" :title="x.h + ': ' + x.n + ' siswa'">{{ x.h }} {{ x.n }}</span></div><span v-else class="small muted">{{ a.tidakDinilai ? 'tidak dinilai' : (a.menunggu ? a.menunggu + ' belum dikoreksi' : '') }}</span></td>
             </tr></tbody>
           </table></div></div>
         </template>
@@ -1141,9 +1198,12 @@ table.tbl{width:100%;border-collapse:collapse}
       <chips-input v-model="c.mapel"></chips-input>
     </div>
     <div class="panel panel-pad">
-      <h3 style="margin-bottom:4px">Sinkronisasi hasil</h3>
-      <p class="muted small" style="margin-bottom:12px;max-width:70ch">Jawaban siswa masuk ke antrian cepat lalu dikirim ke GitHub otomatis setiap 1 menit. Gunakan tombol ini untuk mengirim sekarang.</p>
-      <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Mengirim…' : 'Kirim hasil ke GitHub sekarang' }}</button>
+      <h3 style="margin-bottom:4px">Server &amp; arsip</h3>
+      <p class="muted small" style="margin-bottom:12px;max-width:70ch">Jawaban siswa disimpan di server Cloudflare, lalu diarsipkan ke GitHub otomatis setiap 1 menit (satu file per siswa di folder <code>hasil/</code>). Soal, akun, dan jadwal dibaca dari GitHub dan disimpan sementara di server agar cepat.</p>
+      <div class="row">
+        <button class="btn" @click="sinkron()" :disabled="sibukSync">{{ sibukSync ? 'Memproses…' : 'Arsipkan hasil ke GitHub sekarang' }}</button>
+        <button class="btn" @click="sinkron(true)" :disabled="sibukSync" title="Gunakan jika Anda mengubah file di repo GitHub secara langsung">Muat ulang data dari GitHub</button>
+      </div>
       <p class="small muted" style="margin-top:12px">Backend: <span class="tnum">{{ API_URL }}</span><span v-if="versi"> · versi {{ versi }}</span></p>
     </div>
   </div>
@@ -1189,7 +1249,7 @@ table.tbl{width:100%;border-collapse:collapse}
 /* =====================================================================
    PENGATURAN: tempel URL Web App Google Apps Script Anda di sini
    ===================================================================== */
-const API_URL = window.CBT_API_URL || 'https://script.google.com/macros/s/AKfycbwFMTlpHI1FVMOx74CJyyzHUnbSapu70rd-1ghva8uCkWBcflboMRD04VmSl34fsP5T/exec';
+const API_URL = window.CBT_API_URL || 'https://cbt-sekolah.aplikasiafa.workers.dev/';
 
 const { createApp, reactive, computed, watch, nextTick } = Vue;
 
@@ -1259,6 +1319,7 @@ async function api(action, data = {}, opt = {}) {
   for (let i = 0; i <= maks; i++) {
     try {
       const res = await fetch(API_URL, { method: 'POST', body, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow' });
+      if (res.status === 429) { const e = new Error('Server sedang mencapai batas pemakaian. Coba beberapa saat lagi atau hubungi admin.'); e.code = 'BUSY'; throw e; }
       const j = await res.json();
       if (j.serverTime) S.offset = j.serverTime - Date.now();
       if (j.ok) return j.data;
@@ -1336,14 +1397,16 @@ function unduhBlob(nama, isi, mime = 'application/octet-stream') {
 const namaFile = s => String(s).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'data';
 
 /* ---------- penilaian sisi klien (untuk pratinjau & analisis) ---------- */
+function gfChip(st) { return ({ terkirim: ['chip-hijau', 'terkirim'], antre: ['chip-kuning', 'antre'], gagal: ['chip-merah', 'gagal'] })[st] || ['', st]; }
+function tanpaKunci(s) { return (s.tipe === 'pg' && !s.kunci) || (s.tipe === 'pgk' && !(s.kunci || []).length) || (s.tipe === 'isian' && !(s.jawaban || []).some(j => String(j).trim())); }
 function masalahSoal(s) {
   const m = [];
   if (!String(s.teks || '').trim() && !(s.gambar || []).length) m.push('pertanyaan kosong');
-  if (s.tipe === 'pg') { if (!s.opsi.some(o => o.id === s.kunci)) m.push('kunci belum dipilih'); if (s.opsi.some(o => !o.teks.trim() && !o.gambar)) m.push('ada pilihan kosong'); }
-  if (s.tipe === 'pgk') { if (!(s.kunci || []).length) m.push('kunci belum dipilih'); if (s.opsi.some(o => !o.teks.trim() && !o.gambar)) m.push('ada pilihan kosong'); }
+  if (s.tipe === 'pg') { if (!s.gform && !s.opsi.some(o => o.id === s.kunci)) m.push('kunci belum dipilih'); if (s.opsi.some(o => !o.teks.trim() && !o.gambar)) m.push('ada pilihan kosong'); }
+  if (s.tipe === 'pgk') { if (!s.gform && !(s.kunci || []).length) m.push('kunci belum dipilih'); if (s.opsi.some(o => !o.teks.trim() && !o.gambar)) m.push('ada pilihan kosong'); }
   if (s.tipe === 'bs' && s.pernyataan.some(p => !p.teks.trim())) m.push('ada pernyataan kosong');
   if (s.tipe === 'jodoh' && (s.pasangan.filter(p => p.kiri.trim() && p.kanan.trim()).length < 1 || s.pasangan.some(p => !p.kanan.trim()))) m.push('pasangan belum lengkap');
-  if (s.tipe === 'isian' && !s.jawaban.some(j => String(j).trim())) m.push('jawaban belum diisi');
+  if (s.tipe === 'isian' && !s.gform && !s.jawaban.some(j => String(j).trim())) m.push('jawaban belum diisi');
   if (s.tipe === 'urut' && s.opsi.some(o => !o.teks.trim())) m.push('ada butir kosong');
   return m;
 }
@@ -1362,6 +1425,7 @@ function soalBaru(tipe) {
 function normalisasiSoal(s) { // pastikan semua field ada (untuk data lama/impor)
   const b = soalBaru(s.tipe);
   const out = { ...b, ...s, gambar: s.gambar || [] };
+  if (s.tipe === 'isian' && !(s.jawaban || []).length) out.jawaban = [''];
   if (s.tipe === 'jodoh') out.pasangan = (s.pasangan || b.pasangan).map(p => ({ ...p, pengecoh: !p.kiri && !!p.kanan }));
   return out;
 }
@@ -1496,7 +1560,7 @@ app.component('v-beranda', {
 
 app.component('v-bank', {
   template: '#t-bank',
-  data: () => ({ list: null, q: '', fMapel: '', fTingkat: '', baru: null, sibuk: false }),
+  data: () => ({ list: null, q: '', fMapel: '', fTingkat: '', baru: null, sibuk: false, gf: null }),
   computed: {
     mapelList() { return [...new Set([...(S.config.mapel || []), ...(this.list || []).map(b => b.mapel)])].filter(Boolean); },
     tampil() {
@@ -1508,6 +1572,33 @@ app.component('v-bank', {
   mounted() { this.muat(); },
   methods: {
     async muat() { try { this.list = await api('listBank'); } catch (e) { toast(e.message, 'err'); this.list = []; } },
+    async imporGForm() {
+      const g = this.gf;
+      Object.assign(g, { tahap: 'proses', pesan: 'Membaca Google Form…', n: 0, total: 0 });
+      try {
+        const r = await api('imporGForm', { url: g.url.trim(), mapel: g.mapel, tingkat: g.tingkat }, { retry: 1 });
+        let bank = r.bank;
+        const peringatan = r.peringatan || [];
+        if (r.gambar && r.gambar.length) {
+          g.total = r.gambar.length;
+          const peta = {}; let gagal = 0;
+          for (const u of r.gambar) {
+            g.pesan = 'Menyalin gambar ' + (g.n + 1) + ' dari ' + g.total + ' ke GitHub…';
+            try { peta[u] = (await api('salinGambarGForm', { url: u }, { retry: 2 })).url; } catch (e) { gagal++; }
+            g.n++;
+          }
+          if (Object.keys(peta).length) {
+            g.pesan = 'Menyimpan bank soal…';
+            const ganti = x => peta[x] || x;
+            bank.soal.forEach(s => { s.gambar = (s.gambar || []).map(ganti); (s.opsi || []).forEach(o => { if (o.gambar) o.gambar = ganti(o.gambar); }); });
+            bank = (await api('saveBank', { bank }, { retry: 2 })).bank;
+          }
+          if (gagal) peringatan.push(gagal + ' gambar gagal disalin dan masih memakai alamat Google (bisa tidak tampil nanti). Unggah ulang gambar tersebut di editor.');
+        }
+        Object.assign(g, { tahap: 'hasil', bank, peringatan, identitas: r.identitas || [] });
+        this.muat();
+      } catch (e) { g.tahap = 'isi'; toast(e.message, 'err', 10000); }
+    },
     async buat() {
       this.sibuk = true;
       try { const r = await api('saveBank', { bank: { ...this.baru, soal: [] } }); location.hash = '#/editor/' + r.bank.id; }
@@ -1578,7 +1669,7 @@ app.component('soal-view', {
 });
 
 app.component('soal-form', {
-  props: ['s', 'no', 'total'], emits: ['naik', 'turun', 'duplikat', 'hapus', 'ganti-tipe'], template: '#t-soal-form',
+  props: ['s', 'no', 'total'], emits: ['naik', 'turun', 'duplikat', 'hapus', 'ganti-tipe', 'jadi-identitas'], template: '#t-soal-form',
   data() { return { adaStimulus: !!this.s.stimulus }; },
   methods: {
     isKunci(id) { return this.s.tipe === 'pg' ? this.s.kunci === id : (this.s.kunci || []).includes(id); },
@@ -1659,6 +1750,17 @@ app.component('v-editor', {
       const s = this.bank.soal[this.sel];
       if (s.gambar.length >= 6) return toast('Maksimal 6 gambar per soal', 'err');
       unggah(f).then(u => { s.gambar.push(u); toast('Gambar ditempel ke soal ' + (this.sel + 1)); }).catch(err => toast(err.message, 'err'));
+    },
+    jadiIdentitas() {
+      const s = this.bank.soal[this.sel];
+      this.bank.gform.identitas.push({ entry: s.gform.entry, isi: 'nama', judul: polos(s.teks).split('\n')[0].slice(0, 120) });
+      this.bank.soal.splice(this.sel, 1); this.sel = Math.max(0, Math.min(this.sel, this.bank.soal.length - 1));
+      toast('Dipindah ke “Diisi otomatis”. Pilih datanya di panel Google Form, lalu simpan.', 'ok', 6000);
+    },
+    async putusForm() {
+      if (!await tanya('Putuskan dari Google Form?', 'Setelah disimpan, jawaban siswa tidak lagi dikirim ke Google Form dan soal tanpa kunci akan dinilai salah. Tindakan ini tidak bisa dibatalkan.', { ok: 'Putuskan', bahaya: true })) return;
+      this.bank.gform = false; this.bank.soal.forEach(s => { delete s.gform; });
+      toast('Klik Simpan untuk menerapkan');
     },
     terapkanImpor() { const n = this.hasilImpor.length; this.bank.soal.push(...this.hasilImpor); this.sel = this.bank.soal.length - n; this.impor = { buka: false, teks: '' }; toast(n + ' soal ditambahkan. Jangan lupa simpan.'); },
     async simpan() {
@@ -1748,12 +1850,13 @@ app.component('v-monitor', {
   mounted() {
     if (!S.route.id) return;
     this.muat();
-    this.t = setInterval(() => { this.detik++; if (this.auto && this.detik % 15 === 0 && !document.hidden) this.muat(true); }, 1000);
+    this.t = setInterval(() => { this.detik++; if (this.auto && this.detik % 20 === 0 && !document.hidden) this.muat(true); }, 1000);
   },
   unmounted() { clearInterval(this.t); },
   methods: {
     async muat(diam) { try { this.d = await api('monitorUjian', { ujianId: S.route.id }, { retry: diam ? 1 : 3 }); this.diperbarui = Date.now(); } catch (e) { if (!diam) toast(e.message, 'err'); } },
-    online(p) { return p.status === 'mengerjakan' && sekarang() - p.lastSeen < 120000; },
+    online(p) { return p.status === 'mengerjakan' && sekarang() - p.lastSeen < 420000; },
+    gfChip,
     sisa(p) { this.detik; const s = Math.max(0, Math.floor((p.deadline - sekarang()) / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
     aksi(p) {
       const a = [];
@@ -1789,18 +1892,19 @@ app.component('v-hasil', {
   computed: {
     selesai() { return this.d.peserta.filter(p => p.status === 'selesai' && p.hasil); },
     statistik() {
-      const n = this.selesai.map(p => p.hasil.nilai); if (!n.length) return {};
+      const n = this.selesai.map(p => p.hasil.nilai).filter(x => x !== null && x !== undefined); if (!n.length) return {};
       const r = x => Math.round(x * 100) / 100;
       return { rata: r(n.reduce((a, b) => a + b, 0) / n.length), maks: Math.max(...n), min: Math.min(...n), tuntas: n.filter(x => x >= this.kkm).length };
     },
     jmlPerluKoreksi() { return this.selesai.filter(p => p.hasil.perluKoreksi).length; },
+    belumTerkirim() { return this.d.ujian.gform ? this.selesai.filter(p => p.formStatus !== 'terkirim').length : 0; },
     tampil() {
       const q = this.q.toLowerCase(), k = this.sortK, dd = this.sortD;
       const nilai = p => p.hasil ? p.hasil.nilai : -1;
       return this.d.peserta.filter(p => (!q || (p.nama || '').toLowerCase().includes(q) || p.nis.includes(q)) && (!this.fKelas || p.kelas === this.fKelas))
         .sort((a, b) => k === 'nilai' ? (nilai(a) - nilai(b)) * dd : String(a[k] || '').localeCompare(String(b[k] || ''), 'id', { numeric: true }) * dd);
     },
-    soalUraian() { return (this.d.bank ? this.d.bank.soal : []).filter(s => s.tipe === 'uraian'); },
+    soalUraian() { return (this.d.bank ? this.d.bank.soal : []).filter(s => s.tipe === 'uraian' && Number(s.bobot) > 0); },
     soalK() { return this.soalUraian.find(s => s.id === this.kSoal); },
     daftarKoreksi() {
       if (!this.soalK) return [];
@@ -1809,7 +1913,8 @@ app.component('v-hasil', {
     },
     analisis() {
       if (!this.d.bank) return [];
-      const ps = [...this.selesai].sort((a, b) => b.hasil.nilai - a.hasil.nilai), n = ps.length, k = Math.max(1, Math.round(n * 0.27));
+      const ps = [...this.selesai].sort((a, b) => (b.hasil.nilai || 0) - (a.hasil.nilai || 0)), n = ps.length, k = Math.max(1, Math.round(n * 0.27));
+      const gform = !!this.d.bank.gform;
       const atas = ps.slice(0, k), bawah = ps.slice(-k);
       const r2 = x => Math.round(x * 100) / 100;
       return this.d.bank.soal.map(s => {
@@ -1818,11 +1923,12 @@ app.component('v-hasil', {
         const b = Number(s.bobot) || 1;
         const rata = arr => { const v = arr.filter(p => sk(p) !== null && sk(p) !== undefined); return v.length ? v.reduce((a, p) => a + sk(p), 0) / v.length / b : 0; };
         const P = r2(rata(dinilai)), D = r2(rata(atas) - rata(bawah));
-        const o = { id: s.id, teks: s.teks, tipe: s.tipe, persenBenar: dinilai.length ? Math.round(dinilai.filter(p => sk(p) >= b).length / dinilai.length * 100) : 0, p: P, d: D, menunggu: n - dinilai.length };
+        const o = { id: s.id, teks: s.teks, tipe: s.tipe, persenBenar: dinilai.length ? Math.round(dinilai.filter(p => sk(p) >= b).length / dinilai.length * 100) : 0, p: P, d: D, menunggu: n - dinilai.length,
+          tidakDinilai: (gform && tanpaKunci(s)) || (s.tipe === 'uraian' && !Number(s.bobot)) };
         o.pKat = P > 0.7 ? 'Mudah' : P >= 0.3 ? 'Sedang' : 'Sukar'; o.pKelas = P > 0.7 ? 'chip-hijau' : P >= 0.3 ? 'chip-biru' : 'chip-merah';
         o.dKat = D >= 0.4 ? 'Sangat baik' : D >= 0.3 ? 'Baik' : D >= 0.2 ? 'Cukup' : 'Perlu revisi'; o.dKelas = D >= 0.3 ? 'chip-hijau' : D >= 0.2 ? 'chip-biru' : 'chip-merah';
         if (s.tipe === 'pg' || s.tipe === 'pgk') {
-          o.distr = s.opsi.map((op, i) => ({ h: huruf(i), kunci: s.tipe === 'pg' ? s.kunci === op.id : s.kunci.includes(op.id), n: ps.filter(p => { const j = (p.jawaban.j || {})[s.id]; return Array.isArray(j) ? j.includes(op.id) : j === op.id; }).length }));
+          o.distr = s.opsi.map((op, i) => ({ h: huruf(i), kunci: s.tipe === 'pg' ? s.kunci === op.id : (s.kunci || []).includes(op.id), n: ps.filter(p => { const j = (p.jawaban.j || {})[s.id]; return Array.isArray(j) ? j.includes(op.id) : j === op.id; }).length }));
           o.distr.push({ h: '—', n: ps.filter(p => { const j = (p.jawaban.j || {})[s.id]; return !j || (Array.isArray(j) && !j.length); }).length });
         }
         return o;
@@ -1864,10 +1970,24 @@ app.component('v-hasil', {
       try { const r = await api('hitungUlang', { ujianId: S.route.id }); toast(r.dihitung + ' nilai dihitung ulang'); this.muat(); } catch (e) { toast(e.message, 'err'); }
     },
     async sinkron() { try { const r = await api('sinkronSekarang'); toast(r.disinkron ? r.disinkron + ' hasil dikirim ke GitHub' : 'Semua hasil sudah tersimpan di GitHub'); } catch (e) { toast(e.message, 'err'); } },
+    gfChip,
+    async kirimUlangForm() {
+      if (!await tanya('Kirim ulang ke Google Form?', this.belumTerkirim + ' jawaban belum tercatat di Google Form. CBT akan mencoba mengirimnya lagi sekarang.', { ok: 'Kirim ulang' })) return;
+      this.sibuk = true; let total = 0, galat = [];
+      try {
+        for (let i = 0; i < 40; i++) {
+          const r = await api('kirimUlangForm', { ujianId: S.route.id }, { retry: 1 });
+          total += r.terkirim; galat = r.galat || [];
+          if (!r.diproses || !r.terkirim) break;
+        }
+        toast(total + ' jawaban terkirim ke Google Form' + (galat.length ? '. Masih gagal — ' + galat[0] : ''), galat.length ? 'err' : 'ok', 10000);
+        this.muat();
+      } catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
+    },
     async unduh() {
       try {
         const X = await muatXLSX(), soal = this.d.bank.soal;
-        const rows = this.tampil.map((p, i) => ({ No: i + 1, NIS: p.nis, Nama: p.nama, Kelas: p.kelas, Nilai: p.hasil ? p.hasil.nilai : '', Skor: p.hasil ? p.hasil.skor : '', 'Skor maks': p.hasil ? p.hasil.maks : '', Benar: p.hasil ? p.hasil.benar : '', Status: p.status, 'Perlu koreksi': p.hasil && p.hasil.perluKoreksi ? 'ya' : '', Mulai: p.mulai ? new Date(p.mulai).toLocaleString('id-ID') : '', Selesai: p.selesai ? new Date(p.selesai).toLocaleString('id-ID') : '', 'Keluar halaman': p.pelanggaran || 0, Catatan: p.catatan || '' }));
+        const rows = this.tampil.map((p, i) => ({ No: i + 1, NIS: p.nis, Nama: p.nama, Kelas: p.kelas, Nilai: p.hasil && p.hasil.nilai !== null ? p.hasil.nilai : '', Skor: p.hasil ? p.hasil.skor : '', 'Skor maks': p.hasil ? p.hasil.maks : '', Benar: p.hasil ? p.hasil.benar : '', Status: p.status, 'Perlu koreksi': p.hasil && p.hasil.perluKoreksi ? 'ya' : '', Mulai: p.mulai ? new Date(p.mulai).toLocaleString('id-ID') : '', Selesai: p.selesai ? new Date(p.selesai).toLocaleString('id-ID') : '', 'Keluar halaman': p.pelanggaran || 0, Catatan: p.catatan || '', ...(this.d.ujian.gform ? { 'Google Form': p.formStatus || '' } : {}) }));
         const perSoal = this.tampil.filter(p => p.hasil).map(p => { const o = { NIS: p.nis, Nama: p.nama, Kelas: p.kelas }; soal.forEach((s, i) => { const v = p.hasil.perSoal[s.id]; o['S' + (i + 1)] = v === null || v === undefined ? '' : v; }); o.Nilai = p.hasil.nilai; return o; });
         const an = this.analisis.map((a, i) => ({ No: i + 1, Jenis: namaTipe(a.tipe), Soal: polos(a.teks).slice(0, 200), 'Skor penuh (%)': a.persenBenar, P: a.p, Kesukaran: a.pKat, D: a.d, 'Daya pembeda': a.dKat, Sebaran: a.distr ? a.distr.map(x => x.h + ':' + x.n + (x.kunci ? '(kunci)' : '')).join(' ') : '' }));
         const wb = X.utils.book_new();
@@ -1926,9 +2046,14 @@ app.component('v-siswa', {
       if (this.imp.mode === 'ganti' && !await tanya('Ganti semua data siswa?', 'Seluruh data siswa lama akan diganti dengan ' + this.imp.rows.length + ' siswa ini.', { ok: 'Ganti semua', bahaya: true })) return;
       this.sibuk = true;
       try {
-        const r = await api('importSiswa', { rows: this.imp.rows, mode: this.imp.mode }, { retry: 2 });
-        toast(`${r.baru} siswa baru, ${r.ubah} diperbarui${r.lewati.length ? ', ' + r.lewati.length + ' baris dilewati' : ''}`, 'ok', 6000);
-        if (r.config) S.config = r.config;
+        const rows = this.imp.rows, PER = 250; let baru = 0, ubah = 0, lewati = 0, cfg = null;
+        for (let i = 0; i < rows.length; i += PER) {
+          if (rows.length > PER) toast('Mengimpor ' + Math.min(i + PER, rows.length) + ' dari ' + rows.length + ' siswa…', 'ok', 2500);
+          const r = await api('importSiswa', { rows: rows.slice(i, i + PER), mode: i === 0 ? this.imp.mode : 'tambah' }, { retry: 3 });
+          baru += r.baru; ubah += r.ubah; lewati += r.lewati.length; if (r.config) cfg = r.config;
+        }
+        toast(`${baru} siswa baru, ${ubah} diperbarui${lewati ? ', ' + lewati + ' baris dilewati' : ''}`, 'ok', 6000);
+        if (cfg) S.config = cfg;
         this.imp = null; this.muat();
       } catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
     },
@@ -1983,10 +2108,13 @@ app.component('v-pengaturan', {
       try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); toast('Pengaturan tersimpan'); }
       catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
     },
-    async sinkron() {
+    async sinkron(segarkan) {
       this.sibukSync = true;
-      try { const r = await api('sinkronSekarang'); toast(r.disinkron ? r.disinkron + ' hasil dikirim ke GitHub' : 'Semua hasil sudah tersimpan di GitHub'); }
-      catch (e) { toast(e.message, 'err'); } finally { this.sibukSync = false; }
+      try {
+        const r = await api('sinkronSekarang', { segarkan: !!segarkan });
+        if (segarkan) { S.config = await api('getConfig'); this.c = JSON.parse(JSON.stringify(S.config)); }
+        toast((segarkan ? 'Data dimuat ulang dari GitHub. ' : '') + (r.disinkron ? r.disinkron + ' hasil diarsipkan ke GitHub' : 'Semua hasil sudah terarsip di GitHub'));
+      } catch (e) { toast(e.message, 'err'); } finally { this.sibukSync = false; }
     }
   }
 });
