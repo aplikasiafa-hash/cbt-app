@@ -1,0 +1,15 @@
+{
+  "name": "cbt-sekolah-cloudflare",
+  "version": "2.0.0",
+  "private": true,
+  "description": "CBT Sekolah — backend Cloudflare Workers + D1 + Durable Objects (paket gratis)",
+  "scripts": {
+    "dev": "wrangler dev --var DEV_MODE:1",
+    "deploy": "wrangler deploy",
+    "test": "node test/fungsional.test.mjs",
+    "beban": "node test/beban.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.162.0"
+  }
+}

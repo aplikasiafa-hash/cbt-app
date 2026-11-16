@@ -1,230 +1,189 @@
-# CBT Sekolah — Panduan Instalasi & Penggunaan
+# CBT Sekolah — versi Cloudflare (gratis)
 
-Sistem ujian berbasis komputer (CBT) dengan **soal, kunci, dan arsip jawaban tersimpan di GitHub**, server di
-**Cloudflare Workers** (sanggup ribuan siswa bersamaan), dan bisa **mengimpor soal dari Google Form** sekaligus
-mengirim jawaban siswa kembali ke form tersebut.
+Versi ini menggantikan backend Google Apps Script dengan **Cloudflare Workers + D1 + Durable Objects**,
+semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama seperti sebelumnya.
 
-| Bagian | File | Untuk siapa |
+| Bagian | Lokasi | Keterangan |
 |---|---|---|
-| Aplikasi Guru & Admin | `guru/index.html` | Guru menyusun bank soal; admin mengatur jadwal, siswa, guru, memantau ujian |
-| Aplikasi Siswa | `siswa/index.html` | Siswa login dan mengerjakan ujian (HP, laptop, komputer lab) |
-| Server | `worker/worker.js` | Cloudflare Worker + database D1 |
-| Server lama (cadangan) | `backend/Code.gs` | Versi Google Apps Script, untuk sekolah kecil (±300 siswa per sesi) |
+| Aplikasi guru & admin | `public/guru/index.html` | Bank soal, jadwal, monitoring **langsung**, hasil & koreksi |
+| Aplikasi siswa | `public/siswa/index.html` | Login, kerjakan ujian, jawaban tersimpan otomatis |
+| Backend | `src/` | Worker (pintu masuk) + Durable Object "Engine" (mesin ujian) |
+| Pengaturan Cloudflare | `wrangler.jsonc` | Nama aplikasi, repo GitHub gambar/cadangan |
+
+## Apa yang berubah dibanding versi Apps Script
+
+| | Apps Script (lama) | Cloudflare (baru) |
+|---|---|---|
+| Permintaan bersamaan | maks. 30, siswa harus antre/dibagi sesi ±300 | ribuan, tanpa antre |
+| Kirim jawaban | HTTP tiap 30 detik (berat) | koneksi langsung (WebSocket) tiap 60 detik, sangat hemat kuota |
+| Monitoring pengawas | disegarkan tiap 15 detik | **langsung** (berubah sendiri dalam ±4 detik) |
+| Database utama | GitHub + Google Sheet buffer | Cloudflare D1 (SQL) |
+| GitHub | database | **gambar soal** + **cadangan otomatis** (opsional) |
+| Hosting aplikasi | GitHub Pages | ikut di Cloudflare (satu alamat), GitHub Pages tetap bisa |
 
 ```
- Browser Guru/Siswa ──► Cloudflare Worker ──► GitHub repo PRIVAT  (soal, kunci, akun, jadwal, arsip hasil)
-   (GitHub Pages)        token GitHub       ──► GitHub repo PUBLIK (gambar soal)
-                         disimpan di sini   ──► Cloudflare D1      (peserta yang sedang ujian, jawaban sementara, nilai)
-                                            ──► Google Form        (opsional: jawaban dikirim ke form asal)
+ HP/laptop siswa ──HTTP──► Worker (login, daftar ujian) ──► D1 (akun, soal, jadwal, hasil)
+        │
+        └──WebSocket──► Durable Object "Engine": sesi ujian di memori, penilaian, monitoring
+                              │  simpan permanen: SQLite internal + D1
+ Monitor guru ◄──WebSocket────┘
+ Gambar soal ──► GitHub repo publik (cbt-media) via jsDelivr      Cadangan ──► GitHub repo privat (opsional)
 ```
 
-Token GitHub hanya ada di server, kunci jawaban tidak pernah dikirim ke siswa, dan penilaian dilakukan di server.
-Siswa yang membuka "Inspect Element" tidak akan menemukan kunci jawaban.
+## Hasil uji
+
+Diuji di komputer pengembang dengan simulasi Cloudflare resmi (`wrangler dev`):
+
+- **64 uji fungsional** (semua fitur lama: 7 jenis soal, token, kunci perangkat, koreksi, hitung ulang, reset, dll.) — lulus.
+- **Uji beban 1300 siswa sekaligus**: 1300 login, 1300 mulai ujian, 1300 koneksi langsung, 7.800 autosave
+  (median 98 ms), 1300 siswa menekan *Selesai* pada detik yang sama (semua dinilai dalam ±1 detik), 1300 hasil tersimpan.
+- **Server dimatikan di tengah ujian** lalu dinyalakan lagi: semua siswa tersambung ulang, jawaban & sisa waktu utuh.
+- Uji di Chrome: monitor guru berubah sendiri saat siswa menjawab dan saat siswa selesai.
+- Impor data dari repo GitHub versi Apps Script: akun lama bisa login dengan kata sandi lama, bank soal & hasil lama ikut pindah.
+
+> Uji di atas memakai simulasi di komputer, bukan akun Cloudflare Anda. Sebelum ujian besar, lakukan **uji coba 1–2 kelas** dulu.
+
+## Kapasitas & kuota gratis
+
+Batas harian paket gratis Cloudflare **direset pukul 08.00 WITA** (00.00 UTC). Perkiraan pemakaian pada beban
+**terberat**: 1300 siswa × 6 ujian per hari × 90 menit (artinya setiap siswa mengikuti 6 ujian sehari):
+
+| Kuota gratis per hari | Batas | Perkiraan terpakai |
+|---|---|---|
+| Permintaan Worker | 100.000 | ±38.500 |
+| Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±60.000 |
+| Baris ditulis D1 | 100.000 | ±16.000 |
+| Baris dibaca D1 | 5.000.000 | jauh di bawah |
+| Waktu aktif Durable Object | 13.000 GB-detik | ±4.500 |
+
+Membuka halaman aplikasi (HTML) **tidak** dihitung kuota. Pemakaian sebenarnya bisa dilihat di
+dash.cloudflare.com → *Workers & Pages* → `cbt-sekolah` → *Metrics*.
+
+Jika suatu hari butuh lebih (mis. 2.500 siswa), paket **Workers Paid US$5/bulan** menghapus batas harian ini tanpa
+mengubah kode.
 
 ---
 
-## Fitur
+## Langkah 1 — Pasang Node.js & buat akun Cloudflare
 
-**Jenis soal (7):** pilihan ganda, pilihan ganda kompleks, benar/salah (label bisa diganti), menjodohkan (dengan
-pengecoh), isian singkat (banyak alternatif jawaban), mengurutkan, uraian (dikoreksi manual dengan pedoman). Semua soal
-mendukung teks bacaan, gambar (diunggah ke GitHub, otomatis diperkecil, bisa tempel Ctrl+V), rumus LaTeX
-(`$\frac{1}{2}$`), tebal/miring/garis bawah, dan bobot per soal.
+1. Unduh dan pasang **Node.js LTS** dari <https://nodejs.org> (klik *Next* sampai selesai).
+2. Buat akun gratis di <https://dash.cloudflare.com/sign-up> (cukup email; tidak perlu kartu kredit, tidak perlu domain).
 
-**Guru:** bank soal per mapel & tingkat, impor cepat dari teks Word, **impor dari Google Form**, pratinjau tampilan
-siswa, duplikat, unduh/impor JSON, hasil & nilai, koreksi uraian, analisis butir soal, hitung ulang nilai, unduh Excel.
+## Langkah 2 — Pasang ke Cloudflare
 
-**Admin:** jadwal ujian (waktu, durasi, kelas, acak soal & pilihan, token, batas keluar halaman, tampilkan nilai),
-monitoring langsung, reset login pindah perangkat, hentikan & kumpulkan, ulang ujian, data siswa (impor Excel, kartu
-login), data guru, pengaturan sekolah.
+**Cara mudah (Windows):** buka folder `cbt-cloudflare`, klik dua kali **`PASANG-WINDOWS.bat`**.
 
-**Siswa:** daftar ujian sesuai kelas, token ujian, lembar jawaban bergaya LJK, ragu-ragu, sisa waktu sinkron dengan
-server, ukuran huruf, jawaban tersimpan di perangkat dan server, aman saat halaman dimuat ulang atau koneksi putus,
-layar penuh, deteksi keluar halaman, kunci satu perangkat, kirim otomatis saat waktu habis.
+**Cara manual:** buka *Command Prompt* di folder `cbt-cloudflare`, lalu:
+```
+npm install
+npx wrangler login
+npx wrangler deploy
+```
 
----
+- `wrangler login` membuka browser → klik **Allow**.
+- Pada deploy pertama, jika diminta, buat subdomain `workers.dev` (mis. `sman5pinrang`).
+  Database D1 `cbt-sekolah-db` dibuat **otomatis**; tabel dibuat sendiri saat aplikasi pertama dibuka.
+- Setelah selesai, muncul alamat seperti `https://cbt-sekolah.sman5pinrang.workers.dev`.
 
-## Langkah 1 — GitHub
+Aplikasi langsung bisa dibuka:
+- Guru & admin: `https://cbt-sekolah.<subdomain>.workers.dev/guru/`
+- Siswa: `https://cbt-sekolah.<subdomain>.workers.dev/siswa/`
 
-1. Buat tiga repository: `cbt-data` (**Private**, berisi kunci & kata sandi), `cbt-media` (**Public**, gambar soal),
-   `cbt-app` (**Public**, aplikasi guru & siswa).
-2. Buat token: GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** →
-   *Generate new token*. Repository access: **Only select repositories** → `cbt-data` dan `cbt-media`.
-   Permissions → **Contents: Read and write**. Salin tokennya (`github_pat_…`).
-3. Isi awal repo `cbt-data` (akun admin, contoh soal) dibuat oleh fungsi `setup()` di `backend/Code.gs`.
-   Sekolah yang sudah memakai versi Apps Script cukup memakai repo yang sama: semua akun, soal, dan jadwal langsung
-   terbaca oleh server Cloudflare (format dan hash kata sandinya sama).
+## Langkah 3 — GitHub untuk gambar soal (agar guru bisa unggah gambar)
 
-## Langkah 2 — Server Cloudflare
+1. Buat repo **publik** `cbt-media` di GitHub (boleh kosong).
+2. (Opsional, disarankan) Buat repo **privat** `cbt-data` untuk cadangan otomatis soal & hasil.
+3. Buat token: GitHub → *Settings* → *Developer settings* → *Personal access tokens* → **Fine-grained tokens** →
+   *Generate new token* → *Only select repositories*: `cbt-media` (dan `cbt-data`) → *Repository permissions* →
+   **Contents: Read and write** → *Generate*. Salin token (`github_pat_…`).
+4. Buka `wrangler.jsonc`, isi:
+   ```jsonc
+   "MEDIA_REPO": "namaakun/cbt-media",
+   "DATA_REPO": "namaakun/cbt-data",   // kosongkan "" bila tidak memakai cadangan
+   ```
+5. Simpan token sebagai rahasia lalu deploy ulang:
+   ```
+   npx wrangler secret put GITHUB_TOKEN
+   npx wrangler deploy
+   ```
+   (tempel token saat diminta; token tidak pernah tersimpan di file atau browser)
 
-1. Daftar/masuk di <https://dash.cloudflare.com> (paket gratis cukup untuk mulai).
-2. **Storage & Databases → D1 → Create database**, nama `cbt-sekolah`, lokasi *Asia-Pacific*.
-3. **Workers & Pages → Create → Worker**, nama `cbt-sekolah` → *Deploy* → **Edit code**, hapus isinya, tempel seluruh
-   `worker/worker.js` → *Deploy*. Tabel database dibuat otomatis saat pertama dipanggil.
-4. Worker → **Settings → Bindings → Add → D1 database**: nama variabel `DB`, pilih `cbt-sekolah`.
-5. Worker → **Settings → Variables and Secrets**:
-
-   | Nama | Jenis | Isi |
-   |---|---|---|
-   | `GITHUB_TOKEN` | Secret | token dari Langkah 1 |
-   | `SECRET` | Secret | teks acak panjang (mis. 64 huruf/angka) untuk tanda tangan sesi |
-   | `DATA_REPO` | Text | `namaakun/cbt-data` |
-   | `MEDIA_REPO` | Text | `namaakun/cbt-media` |
-   | `BRANCH` | Text | `main` (opsional) |
-
-6. Worker → **Settings → Trigger events → Add → Cron trigger** → `* * * * *` (tiap menit).
-7. Alamat server: `https://cbt-sekolah.<subdomain>.workers.dev`. Buka di browser; harus tampil
-   `{"ok":true,...}`. Subdomain baru bisa butuh 10–15 menit sebelum sertifikatnya aktif.
-
-## Langkah 3 — Aplikasi Guru & Siswa
-
-1. Di `guru/index.html` dan `siswa/index.html`, isi alamat server pada baris
-   `const API_URL = window.CBT_API_URL || '…';`
-2. Unggah folder `guru/` dan `siswa/` ke repo `cbt-app`, lalu aktifkan **Settings → Pages** (branch `main`, root).
-3. Guru & admin: `https://namaakun.github.io/cbt-app/guru/` · Siswa: `https://namaakun.github.io/cbt-app/siswa/`
+Cek di aplikasi guru → **Pengaturan** → bagian *Sistem & cadangan*: repo dan token harus terbaca.
 
 ## Langkah 4 — Penggunaan pertama
 
-1. Masuk aplikasi guru sebagai **admin / admin123**, lalu **segera ganti kata sandi** di *Akun saya*.
-2. **Pengaturan**: nama sekolah, tahun ajaran, tingkat, kelas, mapel.
-3. **Data guru**: buat akun tiap guru. Hapus akun contoh `guru`.
-4. **Data siswa → Impor**: Excel dengan kolom **NIS, Nama, Kelas** (opsional **Kata sandi**). Kata sandi awal = NIS.
-5. **Cetak kartu login**, lalu guru membuat **Bank soal**, admin membuat **Jadwal ujian**.
-6. Hari ujian: pengawas membuka **Monitoring** dan membacakan **token**.
-7. Setelah ujian: **Hasil & koreksi** → koreksi uraian → **Unduh Excel**.
+1. Buka aplikasi guru, masuk dengan **admin / admin123**, lalu **segera ganti kata sandi** di *Akun saya*.
+2. **Pengaturan**: nama sekolah, tahun ajaran, tingkat, kelas, mata pelajaran.
+3. **Data guru**: buat akun guru. Hapus akun contoh `guru`.
+4. **Data siswa → Impor**: Excel dengan kolom **NIS, Nama, Kelas** (opsional **Kata sandi**; bawaan = NIS). Hapus siswa contoh 1001–1003.
+5. Guru membuat **Bank soal**; admin membuat **Jadwal ujian**.
+6. Hari ujian: pengawas membuka **Monitoring** (tanda **● Langsung** = tersambung), bacakan **token**.
+
+### Sudah punya data di versi Apps Script?
+Isi `DATA_REPO` dengan repo data lama (mis. `namaakun/cbt-data`) dan pastikan token punya akses ke repo itu,
+lalu: aplikasi guru → **Pengaturan** → **Impor data dari GitHub…**. Akun guru & siswa (dengan kata sandi lama),
+bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian berlangsung.
 
 ---
 
-## Impor dari Google Form
+## Cara kerja saat ujian
 
-Bank soal → **Impor Google Form** → tempel link responden (`https://forms.gle/…` atau `…/viewform`).
+- Setiap jawaban **langsung tersimpan di perangkat** siswa (aman bila halaman dimuat ulang atau koneksi putus).
+- Perangkat mengirim jawaban ke server lewat koneksi langsung **tiap 60 detik bila ada perubahan**, dan seketika saat
+  siswa keluar halaman.
+- Bila koneksi langsung (WebSocket) diblokir jaringan, aplikasi otomatis memakai HTTP biasa tiap 3 menit.
+- Saat waktu habis, perangkat mengirim otomatis. Bila perangkat mati, server mengumpulkan sendiri dari jawaban
+  terakhir yang tersimpan (maks. ±2 menit setelah waktu habis).
+- Mulai, selesai, dan reset dicatat permanen **sebelum** siswa melihat tanda berhasil. Jawaban sementara dicadangkan
+  tiap 2 menit, sehingga server yang restart di tengah ujian tidak menghilangkan jawaban.
+- Login siswa berlaku 16 jam, jadi siswa cukup login sekali untuk semua sesi ujian hari itu.
 
-**Sebelum impor, buka form di Google Forms → Setelan, lalu pastikan:**
-- **Batasi ke 1 tanggapan** dan **Batasi ke pengguna di organisasi** dalam keadaan mati. Keduanya mewajibkan login
-  Google sehingga server CBT tidak bisa mengirim jawaban.
-- **Kumpulkan alamat email**: *Jangan kumpulkan*.
-- Form **Menerima tanggapan**.
+**Tidak perlu lagi membagi sesi kecil** seperti di versi Apps Script. Pembagian sesi hanya bila ruangan/perangkat terbatas.
 
-| Pertanyaan di Google Form | Menjadi soal CBT |
-|---|---|
-| Pilihan ganda, Drop-down | Pilihan ganda |
-| Kotak centang | Pilihan ganda kompleks |
-| Skala linear, Rating | Pilihan ganda (urutan tidak diacak) |
-| Petak pilihan ganda / kotak centang | Satu soal per baris |
-| Jawaban singkat, Tanggal, Waktu | Isian singkat |
-| Paragraf | Uraian (bobot 0, tidak dinilai, kecuali bobotnya diubah) |
-| Judul & deskripsi, Gambar | Teks bacaan / gambar untuk soal berikutnya |
-| Bagian (section) | Digabung jadi satu ujian; jawaban dikirim untuk semua bagian |
-| Unggah file, Video | Dilewati (dengan peringatan) |
+## Memperbarui aplikasi
 
-- Pertanyaan **Nama, NIS/NISN, Kelas** dikenali otomatis dan diisi dari data siswa (tidak tampil ke siswa). Jika
-  judulnya lain (mis. "No. Absen / NIS"), buka soalnya di editor → **Jadikan isian otomatis**, lalu pilih datanya
-  (Nama, NIS, Kelas, Nama - Kelas, Nama - NIS) di panel *Google Form*.
-- Gambar disalin ke repo `cbt-media` agar tidak hilang.
-- **Kunci jawaban kuis Google Form tidak bisa dibaca dari luar.** Soal tanpa kunci tidak dinilai CBT, tetapi
-  jawabannya tetap terkirim ke Google Form (penilaian kuis tetap berjalan di Google). Tambahkan kunci di editor jika
-  ingin CBT juga menilai. Jenis soal dan daftar pilihan dari form dikunci agar jawaban tetap cocok dengan form;
-  teksnya boleh dirapikan.
-- Pertanyaan **wajib** di form juga wajib di CBT: siswa tidak bisa mengirim sebelum menjawabnya. Jika waktu habis dan
-  pertanyaan wajib masih kosong, Google menolak kiriman itu (nilai tetap tersimpan di CBT). Lebih aman matikan
-  *Wajib diisi* untuk pertanyaan pilihan.
-- Saat siswa selesai, jawabannya langsung dikirim ke Google Form. Bila gagal (Google sibuk, form ditutup), server
-  mencoba lagi otomatis hingga 5 kali. Status per siswa terlihat di **Hasil** (kolom *Google Form*: terkirim / antre /
-  gagal), dan tombol **Kirim ulang ke Google Form** tersedia untuk yang belum terkirim.
+Ubah file, lalu jalankan `npx wrangler deploy` (atau klik dua kali `PASANG-WINDOWS.bat`).
+**Jangan deploy saat ujian berlangsung.** Bila terpaksa, siswa akan tersambung ulang otomatis tanpa kehilangan jawaban.
 
----
+## Hosting di GitHub Pages (opsional)
 
-## Format impor
-
-**Impor cepat soal** (di editor bank soal):
-```
-1. Ibu kota Sulawesi Selatan adalah ...
-A. Kendari
-B. Makassar*
-C. Palu
-
-2. Manakah bilangan prima?
-A. 2
-B. 9
-C. 11
-Kunci: A, C
-
-3. Rumus kimia air adalah ...
-Jawaban: H2O | h2o
-
-4. Jelaskan proses fotosintesis!
-Bobot: 5
+Aplikasi sudah ikut di Cloudflare, jadi ini tidak wajib. Jika tetap ingin memakai GitHub Pages, ubah baris ini di
+`public/guru/index.html` dan `public/siswa/index.html`:
+```js
+const API_URL = window.CBT_API_URL || 'https://cbt-sekolah.<subdomain>.workers.dev/api';
 ```
 
-**Impor siswa:** `.xlsx/.xls/.csv` atau salin-tempel dari Excel. Kolom dikenali dari judul (NIS/NISN, Nama,
-Kelas/Rombel, Kata sandi). Data besar dikirim bertahap 250 baris per permintaan.
+## Uji di komputer sendiri (untuk pengembang)
 
----
-
-## Cara kerja penyimpanan
-
-Repo `cbt-data`:
 ```
-config.json                       identitas sekolah, tingkat, kelas, mapel
-users/guru.json, users/siswa.json akun (kata sandi di-hash SHA-256 + salt)
-bank/_index.json, bank/<id>.json  bank soal + kunci jawaban (+ tautan Google Form bila hasil impor)
-ujian/_index.json                 jadwal ujian
-hasil/<idUjian>/<kelas>/<nis>.json arsip jawaban & nilai tiap siswa
+npm run dev          # server lokal http://localhost:8787 (data uji, tanpa akun Cloudflare)
+npm test             # 64 uji fungsional (jalankan saat "npm run dev" aktif)
+npm run beban        # simulasi 1300 siswa sekaligus
 ```
-Repo `cbt-media`: `img/<tahun>/<bulan>/<acak>.png`
-
-**Alur jawaban siswa:** jawaban selalu disimpan di perangkat siswa, lalu dikirim ke server tiap 3 menit bila ada
-perubahan (dan tanda aktif tiap 5 menit). Data peserta yang sedang ujian ada di database D1, sehingga ribuan siswa
-bisa menyimpan bersamaan tanpa menyentuh GitHub. Saat siswa menekan *Selesai*, nilai langsung dihitung. Setiap menit
-server: (1) mengumpulkan otomatis siswa yang waktunya habis, (2) mengarsipkan hasil baru ke GitHub dalam satu commit,
-(3) mengirim ulang jawaban Google Form yang tertunda. Soal, akun, dan jadwal disimpan sementara di server; jika Anda
-mengubah file di GitHub secara langsung, klik **Pengaturan → Muat ulang data dari GitHub**.
-
----
-
-## Kapasitas & biaya
-
-Uji simulasi lokal: 1.300 siswa login, mulai, menyimpan 3 kali, dan selesai secara bersamaan tanpa satu pun kegagalan
-dan tanpa panggilan ke GitHub; seluruh hasil terarsip dalam 10 putaran (±10 menit).
-
-Batas paket **gratis** Cloudflare (direset tiap hari pukul 08.00 WITA):
-
-| Batas harian | Paket gratis | Pemakaian 1 sesi ujian 1.300 siswa (90 menit) |
-|---|---|---|
-| Permintaan ke Worker | 100.000 | ±35.000–45.000 |
-| Baris D1 ditulis | 100.000 | ±35.000–50.000 |
-| Baris D1 dibaca | 5.000.000 | ±1.000.000 (termasuk monitoring guru) |
-
-Artinya paket gratis cukup untuk **sekitar dua sesi ujian penuh (1.300 siswa) per hari**. Untuk minggu ujian dengan
-3 sesi atau lebih per hari, aktifkan **Workers Paid (US$5/bulan)**: 10 juta permintaan dan 50 juta penulisan per
-bulan, jauh melebihi kebutuhan sekolah. Pemakaian bisa dipantau di dashboard Cloudflare → Workers → `cbt-sekolah` →
-*Metrics*, dan D1 → `cbt-sekolah` → *Metrics*.
-
----
-
-## Keamanan
-
-- Token GitHub hanya tersimpan sebagai *secret* di Cloudflare, tidak pernah dikirim ke browser.
-- Kunci jawaban, pembahasan, pedoman penskoran, dan nilai asli pilihan Google Form tidak pernah dikirim ke siswa.
-- Kata sandi disimpan sebagai hash; login dibatasi 8 percobaan per 10 menit.
-- Sesi memakai token bertanda tangan (HMAC) yang kedaluwarsa otomatis (guru 12 jam, siswa 8 jam).
-- Satu siswa hanya bisa mengerjakan di satu perangkat; pindah perangkat lewat *Reset login* oleh pengawas.
-- Guru hanya melihat bank soal dan hasil ujian miliknya; admin melihat semuanya.
-
-Aplikasi web tidak bisa sepenuhnya mencegah kecurangan (mis. memotret layar dengan HP lain); pengawasan tetap perlu.
-
----
 
 ## Pemecahan masalah
 
 | Gejala | Penyebab & solusi |
 |---|---|
-| "Tidak dapat terhubung ke server" | Periksa internet. Buka alamat server di browser; harus tampil `{"ok":true,...}`. |
-| "GITHUB_TOKEN/SECRET/DATA_REPO belum diatur" | Lengkapi variabel di Worker → Settings → Variables and Secrets. |
-| "GitHub 401 / Bad credentials" | Token kedaluwarsa. Buat token baru, ganti secret `GITHUB_TOKEN`. |
-| "Server sedang mencapai batas pemakaian" | Batas harian paket gratis habis. Tunggu reset (08.00 WITA) atau aktifkan Workers Paid. |
-| Impor Google Form: "mewajibkan login Google" | Matikan *Batasi ke 1 tanggapan* dan *Batasi ke pengguna di organisasi* di setelan form. |
-| Kolom Google Form "gagal" | Arahkan kursor ke status untuk melihat alasan (mis. pertanyaan wajib kosong, form ditutup), perbaiki, lalu *Kirim ulang*. |
-| Gambar soal tidak tampil | Repo media harus publik. Gambar baru via jsDelivr bisa butuh beberapa detik saat pertama dimuat. |
-| Siswa: "sedang dikerjakan di perangkat lain" | Monitoring → ••• → **Reset login**. |
-| Kunci jawaban ternyata salah | Perbaiki di bank soal, lalu Hasil → **Hitung ulang nilai**. |
-| Perubahan langsung di repo GitHub belum terbaca | Pengaturan → **Muat ulang data dari GitHub**. |
+| "Kuota harian Cloudflare sudah habis" / Error 1027 | Batas 100.000 permintaan/hari tercapai. Pulih pukul 08.00 WITA. Jawaban siswa tetap aman di perangkat. Pertimbangkan paket US$5/bulan bila sering terjadi. |
+| Monitor tertulis "Menyambung ulang…" terus | Jaringan memblokir WebSocket. Monitor tetap disegarkan tiap 60 detik. Coba jaringan lain / data seluler. |
+| Siswa: "Offline — jawaban aman di perangkat" | Koneksi putus. Biarkan siswa lanjut; jawaban terkirim saat koneksi kembali. |
+| "MEDIA_REPO belum diatur" saat unggah gambar | Lakukan Langkah 3. Guru tetap bisa memakai *Pakai URL gambar*. |
+| "GitHub 401 / Bad credentials" | Token salah/kedaluwarsa. Buat token baru → `npx wrangler secret put GITHUB_TOKEN`. |
+| "Repo … HARUS PRIVAT" | `DATA_REPO` berisi kunci jawaban & kata sandi, jadikan privat di GitHub. |
+| Siswa: "sedang dikerjakan di perangkat lain" | Pengawas: Monitoring → ••• → **Reset login**. |
+| Siswa salah menekan Selesai | Admin: Monitoring → ••• → **Ulang ujian dari awal**. |
+| Kunci jawaban salah | Perbaiki di bank soal, lalu Hasil → **Hitung ulang nilai**. |
+| Nama sekolah baru belum tampil di halaman login | Disimpan dalam cache ±1 menit. Tunggu sebentar. |
+| `wrangler login` gagal di jaringan sekolah | Coba jaringan lain, atau buat API token di dashboard Cloudflare lalu `set CLOUDFLARE_API_TOKEN=...` sebelum `npx wrangler deploy`. |
+| Melihat log error | `npx wrangler tail` atau dashboard → Workers → `cbt-sekolah` → *Logs*. |
+
+## Keamanan
+
+- Kunci jawaban, pembahasan, dan pedoman penskoran tidak pernah dikirim ke aplikasi siswa; penilaian di server.
+- Kata sandi disimpan sebagai hash (format sama dengan versi lama); login dibatasi 8 kali gagal per 10 menit.
+- Sesi memakai token bertanda tangan (HMAC). Token GitHub hanya ada di *secret* Cloudflare.
+- Satu siswa hanya di satu perangkat; pindah perangkat lewat *Reset login*.
+- Guru hanya melihat bank soal & hasil miliknya; admin melihat semuanya.
+
+Catatan jujur: aplikasi web tidak bisa mencegah semua kecurangan (mis. memotret layar). Pengawasan ruang tetap perlu.

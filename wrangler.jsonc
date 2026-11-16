@@ -1,0 +1,47 @@
+{
+  // =====================================================================
+  //  CBT Sekolah — konfigurasi Cloudflare (paket GRATIS)
+  //  Repo GitHub ini (cbt-app) dihubungkan ke Cloudflare Workers Builds:
+  //  setiap commit ke branch "main" otomatis dipasang ulang.
+  // =====================================================================
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // Nama Worker. HARUS sama dengan nama Worker di dashboard Cloudflare.
+  "name": "cbt-sekolah",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+
+  // Aplikasi guru & siswa (HTML) — aset statis, gratis & tidak dihitung kuota
+  "assets": { "directory": "./public", "binding": "ASSETS", "html_handling": "auto-trailing-slash" },
+
+  // Database D1 "cbt-sekolah-db". Dibuat OTOMATIS saat pemasangan pertama.
+  // Bila Anda membuatnya manual di dashboard, hapus tanda // di depan database_id
+  // lalu tempel Database ID-nya.
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "cbt-sekolah-db"
+    // , "database_id": "TEMPEL-DATABASE-ID-DI-SINI"
+  }],
+
+  // Mesin ujian (sesi langsung + WebSocket). Paket gratis wajib kelas SQLite.
+  "durable_objects": { "bindings": [{ "name": "ENGINE", "class_name": "Engine" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Engine"] }],
+
+  // Perawatan tiap 10 menit (kumpul otomatis bila perangkat siswa mati, cadangan GitHub)
+  "triggers": { "crons": ["*/10 * * * *"] },
+
+  "vars": {
+    // >>> GANTI "namaakun" dengan nama akun GitHub Anda <<<
+    // Repo PUBLIK untuk gambar soal
+    "MEDIA_REPO": "namaakun/cbt-media",
+    // Repo PRIVAT untuk cadangan otomatis soal & hasil ("" = tidak dipakai)
+    "DATA_REPO": "namaakun/cbt-data",
+    "BRANCH": "main",
+    "MEDIA_CDN": "jsdelivr"
+  },
+  // GITHUB_TOKEN TIDAK ditulis di sini. Simpan di dashboard Cloudflare:
+  // Workers & Pages → cbt-sekolah → Settings → Variables and Secrets → Add → Secret
+
+  "observability": { "enabled": true, "head_sampling_rate": 0.25 }
+}
