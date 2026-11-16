@@ -34,9 +34,9 @@
   "vars": {
     // >>> GANTI "namaakun" dengan nama akun GitHub Anda <<<
     // Repo PUBLIK untuk gambar soal
-    "MEDIA_REPO": "namaakun/cbt-media",
+    "MEDIA_REPO": "aplikasiafa-hash/cbt-media",
     // Repo PRIVAT untuk cadangan otomatis soal & hasil ("" = tidak dipakai)
-    "DATA_REPO": "namaakun/cbt-data",
+    "DATA_REPO": "aplikasiafa-hash/cbt-data",
     "BRANCH": "main",
     "MEDIA_CDN": "jsdelivr"
   },
