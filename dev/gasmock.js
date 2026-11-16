@@ -190,4 +190,4 @@ function call(ctx, action, data, token) {
   return JSON.parse(out.getContent());
 }
 
-module.exports = { boot, call, freshExec, repos, headFiles, spreadsheets, cacheStore, propStore, ghStats, setOffset: ms => { TIME_OFFSET = ms; }, getOffset: () => TIME_OFFSET, now };
+module.exports = { ghRoute, boot, call, freshExec, repos, headFiles, spreadsheets, cacheStore, propStore, ghStats, setOffset: ms => { TIME_OFFSET = ms; }, getOffset: () => TIME_OFFSET, now };
