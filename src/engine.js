@@ -23,11 +23,21 @@ const JW_FLUSH_MS = 120000;    // cadangkan jawaban sementara tiap 2 menit
 const DENYUT_MS = 4000;        // dorong perubahan ke monitor tiap 4 detik
 const ALARM_MS = 60000;        // perawatan saat tidak ada koneksi
 const BACKUP_MS = 30 * 60000;  // cadangan GitHub otomatis maks. tiap 30 menit
-const PUBLIK = new Set(['_dev']);
+const PUBLIK = new Set(['_dev', 'ping', 'loginSiswa', 'loginGuru']);
 
 const HDR = { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
 const jres = o => new Response(JSON.stringify(o), { headers: HDR });
 const kirim = (ws, o) => { try { ws.send(JSON.stringify(o)); } catch (e) { /* koneksi sudah tutup */ } };
+const POTONG = 400000;
+/** Jawaban besar (hasil 1300 siswa, bank soal) dipecah agar aman dari batas ukuran pesan WebSocket. */
+function kirimBesar(ws, o) {
+  const s = JSON.stringify(o);
+  try {
+    if (s.length <= POTONG) return ws.send(s);
+    const n = Math.ceil(s.length / POTONG);
+    for (let i = 0; i < n; i++) ws.send(JSON.stringify({ t: 'pt', id: o.id, i, n, s: s.slice(i * POTONG, (i + 1) * POTONG) }));
+  } catch (e) { /* koneksi sudah tutup */ }
+}
 const ember = nis => X.seed_(String(nis)) % NB;
 
 function rekam(P) {
@@ -338,9 +348,9 @@ export class Engine extends DurableObject {
     this.jadwalSync(1500);
     const info = this.infoSelesai(P, u);
     const set = L.socks.get(P.nis);
-    if (set) for (const ws of set) {
+    if (set) for (const ws of [...set]) {
       kirim(ws, { t: 'selesai', data: info });
-      setTimeout(() => { try { ws.close(1000, 'selesai'); } catch (e) {} }, 3000);
+      this.akhiriIkatan(ws, 1000, 'selesai', 3000);
     }
     return info;
   }
@@ -354,9 +364,9 @@ export class Engine extends DurableObject {
   }
   tendangLain(L, nis, perangkat) {
     const set = L.socks.get(nis);
-    if (set) for (const ws of [...set]) if (ws.info.perangkat !== perangkat) {
-      kirim(ws, { t: 'err', code: 'PERANGKAT', msg: 'Ujian ini dilanjutkan di perangkat lain.' });
-      try { ws.close(4001, 'perangkat lain'); } catch (e) {}
+    if (set) for (const ws of [...set]) if (ws.info.s && ws.info.s.perangkat !== perangkat) {
+      kirim(ws, { t: 'err', k: 'ikut', code: 'PERANGKAT', msg: 'Ujian ini dilanjutkan di perangkat lain.' });
+      this.akhiriIkatan(ws, 4001, 'perangkat lain');
       set.delete(ws);
     }
   }
@@ -450,97 +460,169 @@ export class Engine extends DurableObject {
 
   // ==========================================================================
   //  WEBSOCKET
+  //  ?r=1  → soket tunggal aplikasi (dibuka sekali per halaman = 1 request kuota).
+  //          Semua aksi lewat pesan {t:'rpc'}; ikut ujian {t:'ikut'}; monitor {t:'pantau'}; {t:'lepas'}.
+  //  ?u=…  → soket ujian lama (siswa), ?m=… → soket monitor lama (guru) — tetap didukung.
   // ==========================================================================
   bukaWs(url) {
     const pair = new WebSocketPair();
     const [client, ws] = Object.values(pair);
     ws.accept();
     this.sockets.add(ws);
+    const rpc = url.searchParams.get('r') === '1';
+    ws.info = { rpc, s: null, m: null, t0: Date.now(), last: Date.now(), potong: null };
     ws.addEventListener('message', ev => { this.pesan(ws, ev.data).catch(e => console.error('ws', e && e.stack || e)); });
     const tutup = () => this.lepasWs(ws);
     ws.addEventListener('close', tutup);
     ws.addEventListener('error', tutup);
-    ws.siap = this.sambut(ws, url);
+    ws.siap = rpc ? Promise.resolve() : this.sambut(ws, url);
     this.mulaiDenyut();
     return new Response(null, { status: 101, webSocket: client });
   }
+  /** Soket lama: identitas dari alamat. */
   async sambut(ws, url) {
     try {
       const me = await X.verifyToken_(url.searchParams.get('t'), this.secret);
       const mId = url.searchParams.get('m');
-      if (mId) {
-        X.reqGuru_(me);
-        const u = this.ujianWajib(mId);
-        this.bolehUjian(me, u);
-        const L = await this.getL(u.id);
-        const snap = await this.monitorPayload(L, u);
-        if (!this.sockets.has(ws)) return;
-        ws.info = { kind: 'm', L, me, t0: Date.now() }; ws.mv = L.mv;
-        L.mons.add(ws);
-        kirim(ws, { t: 'snap', data: snap, now: now() });
-        return;
-      }
-      X.reqSiswa_(me);
-      const u = this.ujianWajib(url.searchParams.get('u'));
-      const perangkat = str_(url.searchParams.get('p'), 60);
-      const L = await this.getL(u.id);
-      if (!this.sockets.has(ws)) return;
-      const P = L.P.get(me.id);
-      if (P && P.status === 'mengerjakan' && P.deadline + GRACE_MS < now()) {
-        const bank = await this.getBank(u.bankId);
-        if (bank) this.finalisasi(L, P, u, bank, 'waktu habis');
-      }
-      if (!P || P.status !== 'mengerjakan') {
-        kirim(ws, P && P.status === 'selesai' ? { t: 'selesai', data: this.infoSelesai(P, u) } : { t: 'status', status: P ? P.status : 'belum' });
-        ws.close(1000, 'bukan sesi aktif');
-        return;
-      }
-      this.cekPerangkat(P, perangkat);
-      if (!P.perangkat && perangkat) { P.perangkat = perangkat; this.persistP(L, P); }
-      this.tendangLain(L, me.id, perangkat);
-      ws.info = { kind: 's', L, me, perangkat, u };
-      let set = L.socks.get(me.id);
-      if (!set) L.socks.set(me.id, set = new Set());
-      set.add(ws);
-      P.lastSeen = now(); this.ubah(L, P);
-      kirim(ws, { t: 'hai', now: now(), deadline: P.deadline, status: P.status });
+      if (mId) await this.pantau(ws, me, mId);
+      else await this.ikutUjian(ws, me, url.searchParams.get('u'), str_(url.searchParams.get('p'), 60));
     } catch (e) {
       const i = X.errInfo(e);
       kirim(ws, { t: 'err', code: i.code, msg: i.msg });
       try { ws.close(i.code === 'PERANGKAT' ? 4001 : 4000, i.code); } catch (e2) {}
-      ws.info = null;
     }
+  }
+  /** Hubungkan soket ke sesi ujian siswa (untuk autosave & pemberitahuan langsung). */
+  async ikutUjian(ws, me, uId, perangkat) {
+    X.reqSiswa_(me);
+    const u = this.ujianWajib(uId);
+    const L = await this.getL(u.id);
+    if (!this.sockets.has(ws)) return;
+    let P = L.P.get(me.id);
+    if (P && P.status === 'mengerjakan' && P.deadline + GRACE_MS < now()) {
+      const bank = await this.getBank(u.bankId);
+      if (bank) this.finalisasi(L, P, u, bank, 'waktu habis');
+    }
+    P = L.P.get(me.id);
+    if (!P || P.status !== 'mengerjakan') {
+      kirim(ws, P && P.status === 'selesai' ? { t: 'selesai', data: this.infoSelesai(P, u) } : { t: 'status', status: P ? P.status : 'belum' });
+      if (!ws.info.rpc) try { ws.close(1000, 'bukan sesi aktif'); } catch (e) {}
+      return;
+    }
+    this.cekPerangkat(P, perangkat);
+    if (!P.perangkat && perangkat) { P.perangkat = perangkat; this.persistP(L, P); }
+    this.lepasIkatan(ws);
+    this.tendangLain(L, me.id, perangkat);
+    ws.info.s = { L, me, perangkat, u };
+    let set = L.socks.get(me.id);
+    if (!set) L.socks.set(me.id, set = new Set());
+    set.add(ws);
+    P.lastSeen = now(); this.ubah(L, P);
+    kirim(ws, { t: 'hai', now: now(), deadline: P.deadline, status: P.status });
+  }
+  /** Hubungkan soket guru ke monitor satu ujian. */
+  async pantau(ws, me, mId) {
+    X.reqGuru_(me);
+    const u = this.ujianWajib(mId);
+    this.bolehUjian(me, u);
+    const L = await this.getL(u.id);
+    const snap = await this.monitorPayload(L, u);
+    if (!this.sockets.has(ws)) return;
+    this.lepasIkatan(ws);
+    ws.info.m = { L, me }; ws.mv = L.mv;
+    L.mons.add(ws);
+    if (ws.info.rpc) kirimBesar(ws, { t: 'snap', id: 'snap' + (++this.nomorSnap || (this.nomorSnap = 1)), data: snap, now: now() });
+    else kirim(ws, { t: 'snap', data: snap, now: now() });
+  }
+  lepasIkatan(ws) {
+    const inf = ws.info;
+    if (!inf) return;
+    if (inf.m) { inf.m.L.mons.delete(ws); inf.m = null; }
+    if (inf.s) {
+      const { L, me } = inf.s;
+      const set = L.socks.get(me.id);
+      if (set) { set.delete(ws); if (!set.size) L.socks.delete(me.id); }
+      const P = L.P.get(me.id); if (P) this.ubah(L, P);
+      inf.s = null;
+    }
+  }
+  /** Ujian selesai / direset / pindah perangkat: soket tunggal cukup dilepas, soket lama ditutup. */
+  akhiriIkatan(ws, kode, alasan, jeda) {
+    if (ws.info && ws.info.rpc) return this.lepasIkatan(ws);
+    const tutup = () => { try { ws.close(kode || 1000, alasan || ''); } catch (e) {} };
+    if (jeda) setTimeout(tutup, jeda); else tutup();
   }
   async pesan(ws, data) {
     await ws.siap;
     const inf = ws.info;
-    if (!inf || typeof data !== 'string' || data.length > 200000) return;
+    if (!inf || typeof data !== 'string' || data.length > 1200000) return;
+    inf.last = Date.now();
     let m; try { m = JSON.parse(data); } catch (e) { return; }
-    if (inf.kind !== 's') return;
+    if (m.t === 'pt') {                       // potongan pesan besar (bank soal, gambar, impor)
+      if (!inf.rpc) return;
+      const pot = inf.potong || (inf.potong = new Map());
+      let b = pot.get(m.id);
+      if (!b) {
+        if (pot.size >= 8 || !(m.n > 1 && m.n <= 30)) return;
+        pot.set(m.id, b = { n: m.n, a: [], k: 0 });
+      }
+      if (typeof m.s !== 'string' || !(m.i >= 0 && m.i < b.n) || b.a[m.i] !== undefined) return;
+      b.a[m.i] = m.s; b.k++;
+      if (b.k < b.n) return;
+      pot.delete(m.id);
+      try { m = JSON.parse(b.a.join('')); } catch (e) { return; }
+      if (!m || m.t === 'pt') return;
+    }
+    if (m.t === 'rpc') return this.prosesRpc(ws, m);
+    if (m.t === 'ikut' || m.t === 'pantau') {
+      try {
+        const me = await X.verifyToken_(m.tok, this.secret);
+        if (m.t === 'ikut') await this.ikutUjian(ws, me, m.u, str_(m.p, 60));
+        else await this.pantau(ws, me, m.m);
+      } catch (e) {
+        const i = X.errInfo(e);
+        kirim(ws, { t: 'err', k: m.t, code: i.code, msg: i.msg });
+      }
+      return;
+    }
+    if (m.t === 'lepas') return this.lepasIkatan(ws);
+    if (m.t !== 'j' && m.t !== 'selesai') return;
+    const s = inf.s;
+    if (!s) { kirim(ws, { t: 'perlu_ikut', id: m.id }); return; }   // mis. setelah server dimulai ulang
     try {
       if (m.t === 'j') {
-        let r = this.simpanInti(inf.L, inf.me, { jawaban: m.j, pelanggaran: m.p, perangkat: inf.perangkat }, false);
-        if (r === null) { const bank = await this.getBank(inf.u.bankId); r = this.finalisasi(inf.L, inf.L.P.get(inf.me.id), inf.u, bank, 'waktu habis'); }
+        let r = this.simpanInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, perangkat: s.perangkat }, false);
+        if (r === null) { const bank = await this.getBank(s.u.bankId); r = this.finalisasi(s.L, s.L.P.get(s.me.id), s.u, bank, 'waktu habis'); }
         kirim(ws, { t: 'ok', v: m.v, now: now(), ...r });
-      } else if (m.t === 'selesai') {
-        const r = await this.selesaiInti(inf.L, inf.me, { jawaban: m.j, pelanggaran: m.p, alasan: m.a, perangkat: inf.perangkat });
+      } else {
+        const r = await this.selesaiInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, alasan: m.a, perangkat: s.perangkat });
         kirim(ws, { t: 'hasil', id: m.id, data: r });
       }
     } catch (e) {
       const i = X.errInfo(e);
-      kirim(ws, { t: 'err', id: m.id, code: i.code, msg: i.msg });
-      if (i.code === 'PERANGKAT') try { ws.close(4001, 'perangkat'); } catch (e2) {}
+      kirim(ws, { t: 'err', k: 'ikut', id: m.id, code: i.code, msg: i.msg });
+      if (i.code === 'PERANGKAT') this.akhiriIkatan(ws, 4001, 'perangkat');
     }
+  }
+  /** Satu aksi lewat soket — sama persis dengan HTTP, tanpa menambah request kuota. */
+  async prosesRpc(ws, m) {
+    let res;
+    try {
+      const fn = this.AKSI[m.a];
+      if (!fn) throw new AppError('Aksi tidak dikenal: ' + m.a);
+      const me = PUBLIK.has(m.a) ? null : await X.verifyToken_(m.tok, this.secret);
+      const data = await fn.call(this, m.d || {}, me);
+      res = { t: 'res', id: m.id, ok: true, data: data === undefined ? null : data, now: now() };
+    } catch (e) {
+      const i = X.errInfo(e);
+      if (!(e && e.app)) console.error(m.a + ': ' + (e && e.stack || e));
+      res = { t: 'res', id: m.id, ok: false, error: i.msg, code: i.code, now: now() };
+    }
+    kirimBesar(ws, res);
   }
   lepasWs(ws) {
     if (!this.sockets.delete(ws)) return;
-    const inf = ws.info;
-    if (inf && inf.kind === 'm') inf.L.mons.delete(ws);
-    if (inf && inf.kind === 's') {
-      const set = inf.L.socks.get(inf.me.id);
-      if (set) { set.delete(ws); if (!set.size) inf.L.socks.delete(inf.me.id); }
-      const P = inf.L.P.get(inf.me.id); if (P) this.ubah(inf.L, P);
-    }
+    this.lepasIkatan(ws);
     if (!this.sockets.size) this.hentiDenyut();
   }
   mulaiDenyut() {
@@ -564,11 +646,14 @@ export class Engine extends DurableObject {
       }
     }
     if (this.ketukan % 10 === 0) {         // ±40 detik: jaga koneksi tetap hidup + sinkron jam
-      const msg = JSON.stringify({ t: 'tik', now: t });
-      for (const ws of this.sockets) {
+      const msg = JSON.stringify({ t: 'tik', now: t }), skrg = Date.now();
+      for (const ws of [...this.sockets]) {
         try { ws.send(msg); } catch (e) {}
-        // monitor yang terbuka > 4 jam ditutup (hemat kuota durasi), aplikasi guru menyambung ulang bila perlu
-        if (ws.info && ws.info.kind === 'm' && Date.now() - ws.info.t0 > 4 * 3600000) try { ws.close(1000, 'segarkan'); } catch (e) {}
+        const inf = ws.info; if (!inf) continue;
+        const diam = skrg - (inf.last || inf.t0);
+        // soket yang lama tidak dipakai ditutup; aplikasi menyambung lagi saat dibutuhkan
+        const tutup = inf.rpc ? ((!inf.s && !inf.m && diam > 3 * 3600000) || (inf.m && diam > 6 * 3600000)) : (inf.m && skrg - inf.t0 > 4 * 3600000);
+        if (tutup) try { ws.close(1000, 'diam'); } catch (e) {}
       }
     }
     if (this.ketukan % 8 === 0) this.rawat().catch(e => console.error('rawat', e && e.stack || e));
@@ -651,6 +736,69 @@ A._dev = async function (d) {
   X.setOffset(d.offset);
   if (d.rawat) await this.rawat();
   return { offset: d.offset, sockets: this.sockets.size, live: this.L.size };
+};
+
+// ---------------------------------------------------------------- masuk & daftar (juga tersedia lewat soket tunggal)
+function cekGagal(self, k) {
+  const g = self.gagalLogin && self.gagalLogin.get(k);
+  if (g && g.n >= 8 && now() - g.t < 600000) throw new AppError('Terlalu banyak percobaan masuk. Tunggu 10 menit lalu coba lagi.');
+}
+function catatGagal(self, k) {
+  const map = self.gagalLogin || (self.gagalLogin = new Map());
+  if (map.size > 20000) map.clear();
+  const g = map.get(k), t = now();
+  if (!g || t - g.t > 600000) map.set(k, { n: 1, t }); else { g.n++; g.t = t; }
+}
+A.ping = async function () {
+  const c = this.config;
+  return { app: 'CBT Sekolah', versi: X.VERSI, namaSekolah: c.namaSekolah, logo: c.logo || '', tahunAjaran: c.tahunAjaran, semester: c.semester };
+};
+A.getConfig = async function () { return this.config; };
+A.loginSiswa = async function (d) {
+  const nis = str_(d.nis, 40).trim(), k = 's:' + nis;
+  cekGagal(this, k);
+  const sw = await this.env.DB.prepare(`SELECT nis, nama, kelas, salt, hash FROM siswa WHERE nis = ?`).bind(nis).first();
+  if (!sw || !(await X.cekPw_(sw, d.password))) { catatGagal(this, k); throw new AppError('NIS atau kata sandi salah'); }
+  const token = await X.signToken_({ r: 'siswa', id: String(sw.nis), n: sw.nama, k: sw.kelas, exp: now() + X.TOKEN_SISWA_JAM * 3600000 }, this.secret);
+  return { token, user: { nis: String(sw.nis), nama: sw.nama, kelas: sw.kelas }, sekolah: { namaSekolah: this.config.namaSekolah, logo: this.config.logo || '' } };
+};
+A.loginGuru = async function (d) {
+  const username = str_(d.username, 60).trim().toLowerCase(), k = 'g:' + username;
+  cekGagal(this, k);
+  const u = [...this.guru.values()].find(g => g.username === username);
+  if (!u || !(await X.cekPw_(u, d.password))) { catatGagal(this, k); throw new AppError('Nama pengguna atau kata sandi salah'); }
+  if (u.aktif === false) throw new AppError('Akun dinonaktifkan. Hubungi admin.');
+  const role = u.role === 'admin' ? 'admin' : 'guru';
+  const token = await X.signToken_({ r: role, id: u.id, n: u.nama, exp: now() + X.TOKEN_GURU_JAM * 3600000 }, this.secret);
+  return { token, user: { id: u.id, username: u.username, nama: u.nama, role, mapel: u.mapel || [] }, config: this.config };
+};
+A.ujianSaya = async function (d, me) {
+  X.reqSiswa_(me);
+  const t = now();
+  const list = [...this.ujian.values()]
+    .filter(u => u.aktif && (u.kelas || []).indexOf(me.k) >= 0 && u.selesai >= t - 3 * 86400000 && u.mulai <= t + 7 * 86400000)
+    .sort((a, b) => a.mulai - b.mulai);
+  const st = {}, cariD1 = [];
+  for (const u of list) {
+    const L = this.L.get(u.id);
+    if (!L) { cariD1.push(u.id); continue; }
+    const P = L.P.get(me.id);
+    if (P && (P.status === 'selesai' || P.status === 'mengerjakan')) st[u.id] = { status: P.status, nilai: P.hasil ? P.hasil.nilai : null, perlu: P.hasil ? P.hasil.perluKoreksi : 0 };
+  }
+  if (cariD1.length) {
+    const r = await this.env.DB.prepare(`SELECT ujian_id, nilai, perlu FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`).bind(me.id, JSON.stringify(cariD1)).all();
+    r.results.forEach(x => { st[x.ujian_id] = { status: 'selesai', nilai: x.nilai, perlu: x.perlu }; });
+  }
+  return list.map(u => {
+    const h = st[u.id], b = this.bankIdx.get(u.bankId);
+    const item = {
+      id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi,
+      jumlahSoal: b ? b.jumlahSoal : u.jumlahSoal, pakaiToken: u.pakaiToken, keterangan: u.keterangan,
+      jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? h.status : 'belum'
+    };
+    if (h && h.status === 'selesai' && u.tampilNilai) { item.nilai = h.nilai; item.perluKoreksi = h.perlu; }
+    return item;
+  });
 };
 
 // ---------------------------------------------------------------- umum
@@ -843,8 +991,8 @@ A.deleteUjian = async function (d, me) {
     if (n && !d.paksa) throw new AppError('Sudah ada ' + n + ' peserta yang mengerjakan. Hapus tetap akan menyimpan hasil yang sudah ada di database.', 'ADA_PESERTA');
     if (L) {
       await this.syncD1();
-      for (const ws of [...L.mons]) try { ws.close(1000, 'dihapus'); } catch (e) {}
-      for (const set of L.socks.values()) for (const ws of set) { kirim(ws, { t: 'reset' }); try { ws.close(1000, 'dihapus'); } catch (e) {} }
+      for (const ws of [...L.mons]) { kirim(ws, { t: 'err', k: 'pantau', code: 'ERR', msg: 'Ujian ini sudah dihapus' }); this.akhiriIkatan(ws, 1000, 'dihapus'); }
+      for (const set of [...L.socks.values()]) for (const ws of [...set]) { kirim(ws, { t: 'reset' }); this.akhiriIkatan(ws, 1000, 'dihapus'); }
       this.sql.exec(`DELETE FROM p WHERE u = ?`, u.id); this.sql.exec(`DELETE FROM jw WHERE u = ?`, u.id);
       this.L.delete(u.id);
     }
@@ -914,7 +1062,7 @@ A.resetPeserta = async function (d, me) {
   this.persistP(L, P); this.ubah(L, P);
   L.dirty.add(ember(P.nis));
   const set = L.socks.get(P.nis);
-  if (set) for (const ws of set) { kirim(ws, { t: 'reset' }); try { ws.close(1000, 'direset'); } catch (e) {} }
+  if (set) for (const ws of [...set]) { kirim(ws, { t: 'reset' }); this.akhiriIkatan(ws, 1000, 'direset'); }
   await this.syncD1();
   return true;
 };

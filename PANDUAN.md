@@ -16,15 +16,18 @@ semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama
 |---|---|---|
 | Permintaan bersamaan | maks. 30, siswa harus antre/dibagi sesi ±300 | ribuan, tanpa antre |
 | Kirim jawaban | HTTP tiap 30 detik (berat) | koneksi langsung (WebSocket) tiap 60 detik, sangat hemat kuota |
+| Kuota per buka aplikasi | setiap klik = 1 permintaan | **1 permintaan** untuk seluruh pemakaian (login, edit soal, jadwal, monitor, ujian, nilai) |
 | Monitoring pengawas | disegarkan tiap 15 detik | **langsung** (berubah sendiri dalam ±4 detik) |
 | Database utama | GitHub + Google Sheet buffer | Cloudflare D1 (SQL) |
 | GitHub | database | **gambar soal** + **cadangan otomatis** (opsional) |
 | Hosting aplikasi | GitHub Pages | ikut di Cloudflare (satu alamat), GitHub Pages tetap bisa |
 
 ```
- HP/laptop siswa ──HTTP──► Worker (login, daftar ujian) ──► D1 (akun, soal, jadwal, hasil)
-        │
-        └──WebSocket──► Durable Object "Engine": sesi ujian di memori, penilaian, monitoring
+ HP/laptop siswa / guru ──1 koneksi langsung (WebSocket)──► Worker ──► Durable Object "Engine"
+                                                                    sesi ujian di memori, penilaian,
+                                                                    monitoring, login, bank soal, jadwal
+        (HTTP biasa hanya cadangan bila jaringan memblokir WebSocket)        │
+                                                              D1 (akun, soal, jadwal, hasil)
                               │  simpan permanen: SQLite internal + D1
  Monitor guru ◄──WebSocket────┘
  Gambar soal ──► GitHub repo publik (cbt-media) via jsDelivr      Cadangan ──► GitHub repo privat (opsional)
@@ -35,8 +38,13 @@ semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama
 Diuji di komputer pengembang dengan simulasi Cloudflare resmi (`wrangler dev`):
 
 - **64 uji fungsional** (semua fitur lama: 7 jenis soal, token, kunci perangkat, koreksi, hitung ulang, reset, dll.) — lulus.
-- **Uji beban 1300 siswa sekaligus**: 1300 login, 1300 mulai ujian, 1300 koneksi langsung, 7.800 autosave
-  (median 98 ms), 1300 siswa menekan *Selesai* pada detik yang sama (semua dinilai dalam ±1 detik), 1300 hasil tersimpan.
+- **Uji beban ujian 90 menit, 1300 siswa + 50 guru memantau, 1 koneksi per orang**: 1300 siswa membuka aplikasi
+  bersamaan lalu login, melihat daftar, mulai ujian (semua siap dalam ±7 detik); jawaban dikirim tiap menit selama
+  90 menit (115.700 kiriman, median 103 ms); di menit ke-89,5 semua menekan *Selesai* pada detik yang sama (semua
+  dinilai dalam ±1,4 detik); 1300 hasil tersimpan. Total kuota: **1.350 permintaan** (1300 siswa + 50 guru),
+  0 permintaan HTTP. Versi sebelumnya untuk alur yang sama: ±8.150 (6 per siswa, 7 per guru, diukur di Chrome).
+- **Uji Chrome hitung permintaan**: guru login → bank soal → edit & simpan → jadwal → monitor → hasil = **1 permintaan**;
+  siswa login → mulai → menjawab → selesai → lihat nilai = **1 permintaan**.
 - **Server dimatikan di tengah ujian** lalu dinyalakan lagi: semua siswa tersambung ulang, jawaban & sisa waktu utuh.
 - Uji di Chrome: monitor guru berubah sendiri saat siswa menjawab dan saat siswa selesai.
 - Impor data dari repo GitHub versi Apps Script: akun lama bisa login dengan kata sandi lama, bank soal & hasil lama ikut pindah.
@@ -46,12 +54,12 @@ Diuji di komputer pengembang dengan simulasi Cloudflare resmi (`wrangler dev`):
 ## Kapasitas & kuota gratis
 
 Batas harian paket gratis Cloudflare **direset pukul 08.00 WITA** (00.00 UTC). Perkiraan pemakaian pada beban
-**terberat**: 1300 siswa × 6 ujian per hari × 90 menit (artinya setiap siswa mengikuti 6 ujian sehari):
+**terberat**: 1300 siswa × 6 ujian per hari × 90 menit + 50 guru memantau tiap ujian (artinya setiap siswa mengikuti 6 ujian sehari):
 
 | Kuota gratis per hari | Batas | Perkiraan terpakai |
 |---|---|---|
-| Permintaan Worker | 100.000 | ±38.500 |
-| Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±60.000 |
+| Permintaan Worker ("Requests today") | 100.000 | ±8.100 (1 per buka aplikasi; +1 tiap muat ulang/sambung ulang) |
+| Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±45.000 |
 | Baris ditulis D1 | 100.000 | ±16.000 |
 | Baris dibaca D1 | 5.000.000 | jauh di bawah |
 | Waktu aktif Durable Object | 13.000 GB-detik | ±4.500 |
@@ -131,7 +139,11 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 - Setiap jawaban **langsung tersimpan di perangkat** siswa (aman bila halaman dimuat ulang atau koneksi putus).
 - Perangkat mengirim jawaban ke server lewat koneksi langsung **tiap 60 detik bila ada perubahan**, dan seketika saat
   siswa keluar halaman.
-- Bila koneksi langsung (WebSocket) diblokir jaringan, aplikasi otomatis memakai HTTP biasa tiap 3 menit.
+- Aplikasi guru dan siswa memakai **satu koneksi langsung** untuk semua hal (login, daftar ujian, edit soal, jadwal,
+  monitor, jawaban, nilai). Satu kali membuka aplikasi = 1 permintaan kuota. Bila koneksi putus (sinyal hilang,
+  HP terkunci lama), menyambung ulang menambah 1 permintaan.
+- Bila koneksi langsung (WebSocket) diblokir jaringan, aplikasi otomatis memakai HTTP biasa (tiap klik = 1 permintaan;
+  jawaban dikirim tiap 3 menit).
 - Saat waktu habis, perangkat mengirim otomatis. Bila perangkat mati, server mengumpulkan sendiri dari jawaban
   terakhir yang tersimpan (maks. ±2 menit setelah waktu habis).
 - Mulai, selesai, dan reset dicatat permanen **sebelum** siswa melihat tanda berhasil. Jawaban sementara dicadangkan

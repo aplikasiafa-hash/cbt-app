@@ -1270,8 +1270,95 @@ function tanya(judul, teks, o = {}) {
 }
 
 /* ---------- API ---------- */
+/* =====================================================================
+   KONEKSI TUNGGAL (WebSocket): semua aksi lewat SATU koneksi yang dibuka
+   sekali. 1 kali buka aplikasi = 1 request kuota Cloudflare. Bila koneksi
+   ini tidak tersedia, aplikasi otomatis memakai HTTP biasa.
+   ===================================================================== */
+const Sok = {
+  ws: null, membuka: null, seq: 0, tunggu: new Map(), potongan: new Map(), pendengar: new Set(), gagal: 0, aturWaktu: null,
+  tersedia() { return !!WS_URL && this.gagal < 3; },
+  terbuka() { return !!(this.ws && this.ws.readyState === 1); },
+  buka() {
+    if (this.terbuka()) return Promise.resolve();
+    if (this.membuka) return this.membuka;
+    if (!WS_URL) return Promise.reject(Object.assign(new Error('Koneksi langsung tidak tersedia'), { code: 'NET' }));
+    this.membuka = new Promise((ok, no) => {
+      let ws, jadi = false;
+      const gagal = () => { if (jadi) return; jadi = true; this.membuka = null; this.gagal++; no(Object.assign(new Error('Tidak dapat tersambung'), { code: 'NET' })); };
+      try { ws = new WebSocket(WS_URL + '?r=1'); } catch (e) { return gagal(); }
+      const batas = setTimeout(() => { gagal(); try { ws.close(); } catch (e) {} }, 8000);
+      ws.onopen = () => {
+        if (jadi) { try { ws.close(); } catch (e) {} return; }
+        jadi = true; clearTimeout(batas); this.ws = ws; this.membuka = null; this.gagal = 0; ok(); this.kabari({ t: '_buka' });
+      };
+      ws.onmessage = ev => { if (this.ws === ws) this.terima(ev.data); };
+      ws.onclose = () => {
+        clearTimeout(batas);
+        if (!jadi) return gagal();
+        if (this.ws !== ws) return;
+        this.ws = null;
+        const e = Object.assign(new Error('Koneksi terputus'), { code: 'NET' });
+        this.tunggu.forEach(p => p.no(e)); this.tunggu.clear(); this.potongan.clear();
+        this.kabari({ t: '_tutup' });
+      };
+    });
+    return this.membuka;
+  },
+  kirim(o) {
+    if (!this.terbuka()) return false;
+    try {
+      const s = JSON.stringify(o), P = 400000;
+      if (s.length <= P) this.ws.send(s);
+      else { const id = 'k' + (++this.seq), n = Math.ceil(s.length / P); for (let i = 0; i < n; i++) this.ws.send(JSON.stringify({ t: 'pt', id, i, n, s: s.slice(i * P, (i + 1) * P) })); }
+      return true;
+    } catch (e) { return false; }
+  },
+  terima(raw) {
+    let m; try { m = JSON.parse(raw); } catch (e) { return; }
+    if (m.t === 'pt') {
+      let b = this.potongan.get(m.id);
+      if (!b) this.potongan.set(m.id, b = { n: m.n, a: [], k: 0 });
+      if (b.a[m.i] === undefined) { b.a[m.i] = m.s; b.k++; }
+      if (b.k < b.n) return;
+      this.potongan.delete(m.id);
+      return this.terima(b.a.join(''));
+    }
+    if (m.now && this.aturWaktu) this.aturWaktu(m.now);
+    if (m.t === 'res') { const p = this.tunggu.get(m.id); if (p) { this.tunggu.delete(m.id); p.ok(m); } return; }
+    this.kabari(m);
+  },
+  kabari(m) { this.pendengar.forEach(f => { try { f(m); } catch (e) { console.error(e); } }); },
+  async rpc(a, d, tok, batasMs) {
+    await this.buka();
+    const id = ++this.seq;
+    return new Promise((ok, no) => {
+      const t = setTimeout(() => { this.tunggu.delete(id); no(Object.assign(new Error('Server tidak menjawab'), { code: 'NET' })); }, batasMs || 45000);
+      this.tunggu.set(id, { ok: m => { clearTimeout(t); ok(m); }, no: e => { clearTimeout(t); no(e); } });
+      if (!this.kirim({ t: 'rpc', id, a, d, tok })) { clearTimeout(t); this.tunggu.delete(id); no(Object.assign(new Error('Koneksi terputus'), { code: 'NET' })); }
+    });
+  }
+};
+const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+/** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
+async function apiSok(action, data, tok, onAuth) {
+  if (!Sok.tersedia()) return null;
+  for (let i = 0; i < 3; i++) {
+    let j;
+    try { j = await Sok.rpc(action, data, tok, AKSI_LAMA.has(action) ? 180000 : 45000); } catch (e) { return null; }
+    if (j.ok) return { data: j.data };
+    const e = Object.assign(new Error(j.error || 'Terjadi kesalahan'), { code: j.code });
+    if (j.code === 'AUTH') { onAuth(); throw e; }
+    if (j.code !== 'BUSY') throw e;
+    await sleep(700 * 2 ** i * (0.5 + Math.random()));
+  }
+  return null;
+}
+
+Sok.aturWaktu = n => { S.offset = n - Date.now(); };
 async function api(action, data = {}, opt = {}) {
   if (!API_URL) throw new Error('Alamat backend (API_URL) belum diatur');
+  if (!opt.http) { const r = await apiSok(action, data, S.token, () => keluar(true)); if (r) return r.data; }
   const body = JSON.stringify({ action, data, token: S.token });
   const maks = opt.retry ?? 4;
   let terakhir;
@@ -1770,10 +1857,12 @@ app.component('v-monitor', {
   mounted() {
     if (!S.route.id) return;
     this.gagal = 0; this.mati = false;
+    this.dengar = m => this.pesan(m);
+    Sok.pendengar.add(this.dengar);
     this.sambung();
     // cadangan bila koneksi langsung (WebSocket) tidak tersedia: segarkan tiap 60 detik
     this.t = setInterval(() => { this.detik++; if (!this.langsung && this.detik % 60 === 0 && !document.hidden) this.muat(true); }, 1000);
-    this.onVis = () => { if (!document.hidden && !this.ws && !this.mati) this.sambung(); };
+    this.onVis = () => { if (!document.hidden && !this.langsung && !this.mati) this.sambung(); };
     document.addEventListener('visibilitychange', this.onVis);
   },
   unmounted() { clearInterval(this.t); document.removeEventListener('visibilitychange', this.onVis); this.putus(); },
@@ -1782,32 +1871,33 @@ app.component('v-monitor', {
     sambung() {
       clearTimeout(this.tWs);
       if (!WS_URL || this.mati) { if (!this.d) this.muat(); return; }
-      let ws;
-      try { ws = new WebSocket(WS_URL + '?' + new URLSearchParams({ t: S.token, m: S.route.id })); } catch (e) { this.muat(); return; }
-      this.ws = ws;
-      ws.onmessage = ev => {
-        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        if (m.now) S.offset = m.now - Date.now();
-        if (m.t === 'snap') { this.d = m.data; this.langsung = true; this.gagal = 0; this.diperbarui = Date.now(); }
-        else if (m.t === 'diff' && this.d) {
-          const idx = new Map(this.d.peserta.map((p, i) => [p.nis, i]));
-          m.rows.forEach(r => { const i = idx.get(r.nis); if (i === undefined) this.d.peserta.push(r); else this.d.peserta.splice(i, 1, r); });
-          this.diperbarui = Date.now();
-        } else if (m.t === 'tik') this.diperbarui = this.diperbarui || Date.now();
-        else if (m.t === 'err') { this.mati = true; if (m.code === 'AUTH') keluar(true); else toast(m.msg, 'err'); }
-      };
-      ws.onclose = () => {
-        if (this.ws !== ws) return;
-        this.ws = null; this.langsung = false;
-        if (this.mati) return;
-        if (!this.d) this.muat(true);
-        this.gagal++;
-        // tiap percobaan = 1 request kuota: setelah 6 kali gagal, coba lagi tiap 5 menit (monitor tetap disegarkan tiap 60 detik)
-        const jeda = this.gagal >= 6 ? 300000 : Math.min(30000, 1000 * 2 ** Math.min(this.gagal, 5)) * (0.5 + Math.random());
-        if (!document.hidden) this.tWs = setTimeout(() => this.sambung(), jeda);
-      };
+      // memakai koneksi tunggal aplikasi (tidak menambah request bila sudah terbuka)
+      Sok.buka().then(() => { if (!this.mati) Sok.kirim({ t: 'pantau', tok: S.token, m: S.route.id }); })
+        .catch(() => { if (!this.d) this.muat(true); this.gagal++; this.jadwal(); });
     },
-    putus() { this.mati = true; clearTimeout(this.tWs); const ws = this.ws; this.ws = null; if (ws) try { ws.close(1000); } catch (e) {} },
+    jadwal() {
+      clearTimeout(this.tWs);
+      // tiap sambung ulang = 1 request: setelah 6 kali gagal, coba lagi tiap 5 menit (monitor tetap disegarkan tiap 60 detik)
+      const jeda = this.gagal >= 6 ? 300000 : Math.min(30000, 1000 * 2 ** Math.min(this.gagal, 5)) * (0.5 + Math.random());
+      if (!document.hidden) this.tWs = setTimeout(() => this.sambung(), jeda);
+    },
+    pesan(m) {
+      if (this.mati) return;
+      if (m.t === 'snap') { this.d = m.data; this.langsung = true; this.gagal = 0; this.diperbarui = Date.now(); }
+      else if (m.t === 'diff' && this.d) {
+        const idx = new Map(this.d.peserta.map((p, i) => [p.nis, i]));
+        m.rows.forEach(r => { const i = idx.get(r.nis); if (i === undefined) this.d.peserta.push(r); else this.d.peserta.splice(i, 1, r); });
+        this.diperbarui = Date.now();
+      } else if (m.t === 'tik') this.diperbarui = this.diperbarui || Date.now();
+      else if (m.t === 'err' && m.k === 'pantau') { this.mati = true; this.langsung = false; if (m.code === 'AUTH') keluar(true); else toast(m.msg, 'err'); }
+      else if (m.t === '_tutup') { this.langsung = false; if (!this.d) this.muat(true); this.gagal++; this.jadwal(); }
+    },
+    putus() {
+      this.mati = true; clearTimeout(this.tWs);
+      Sok.pendengar.delete(this.dengar);
+      if (this.langsung) Sok.kirim({ t: 'lepas' });
+      this.langsung = false;
+    },
     online(p) { return p.status === 'mengerjakan' && (p.online || sekarang() - p.lastSeen < 240000); },
     sisa(p) { this.detik; const s = Math.max(0, Math.floor((p.deadline - sekarang()) / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
     aksi(p) {

@@ -501,8 +501,94 @@ let tokenSesi = localStorage.getItem('cbt_s_token') || '';
 let onAuthGagal = () => {};
 
 const errKuota = () => Object.assign(new Error('Server ujian mencapai batas harian. Lapor ke pengawas — jawaban Anda tetap aman di perangkat ini.'), { code: 'KUOTA' });
+/* =====================================================================
+   KONEKSI TUNGGAL (WebSocket): semua aksi lewat SATU koneksi yang dibuka
+   sekali. 1 kali buka aplikasi = 1 request kuota Cloudflare. Bila koneksi
+   ini tidak tersedia, aplikasi otomatis memakai HTTP biasa.
+   ===================================================================== */
+const Sok = {
+  ws: null, membuka: null, seq: 0, tunggu: new Map(), potongan: new Map(), pendengar: new Set(), gagal: 0, aturWaktu: null,
+  tersedia() { return !!WS_URL && this.gagal < 3; },
+  terbuka() { return !!(this.ws && this.ws.readyState === 1); },
+  buka() {
+    if (this.terbuka()) return Promise.resolve();
+    if (this.membuka) return this.membuka;
+    if (!WS_URL) return Promise.reject(Object.assign(new Error('Koneksi langsung tidak tersedia'), { code: 'NET' }));
+    this.membuka = new Promise((ok, no) => {
+      let ws, jadi = false;
+      const gagal = () => { if (jadi) return; jadi = true; this.membuka = null; this.gagal++; no(Object.assign(new Error('Tidak dapat tersambung'), { code: 'NET' })); };
+      try { ws = new WebSocket(WS_URL + '?r=1'); } catch (e) { return gagal(); }
+      const batas = setTimeout(() => { gagal(); try { ws.close(); } catch (e) {} }, 8000);
+      ws.onopen = () => {
+        if (jadi) { try { ws.close(); } catch (e) {} return; }
+        jadi = true; clearTimeout(batas); this.ws = ws; this.membuka = null; this.gagal = 0; ok(); this.kabari({ t: '_buka' });
+      };
+      ws.onmessage = ev => { if (this.ws === ws) this.terima(ev.data); };
+      ws.onclose = () => {
+        clearTimeout(batas);
+        if (!jadi) return gagal();
+        if (this.ws !== ws) return;
+        this.ws = null;
+        const e = Object.assign(new Error('Koneksi terputus'), { code: 'NET' });
+        this.tunggu.forEach(p => p.no(e)); this.tunggu.clear(); this.potongan.clear();
+        this.kabari({ t: '_tutup' });
+      };
+    });
+    return this.membuka;
+  },
+  kirim(o) {
+    if (!this.terbuka()) return false;
+    try {
+      const s = JSON.stringify(o), P = 400000;
+      if (s.length <= P) this.ws.send(s);
+      else { const id = 'k' + (++this.seq), n = Math.ceil(s.length / P); for (let i = 0; i < n; i++) this.ws.send(JSON.stringify({ t: 'pt', id, i, n, s: s.slice(i * P, (i + 1) * P) })); }
+      return true;
+    } catch (e) { return false; }
+  },
+  terima(raw) {
+    let m; try { m = JSON.parse(raw); } catch (e) { return; }
+    if (m.t === 'pt') {
+      let b = this.potongan.get(m.id);
+      if (!b) this.potongan.set(m.id, b = { n: m.n, a: [], k: 0 });
+      if (b.a[m.i] === undefined) { b.a[m.i] = m.s; b.k++; }
+      if (b.k < b.n) return;
+      this.potongan.delete(m.id);
+      return this.terima(b.a.join(''));
+    }
+    if (m.now && this.aturWaktu) this.aturWaktu(m.now);
+    if (m.t === 'res') { const p = this.tunggu.get(m.id); if (p) { this.tunggu.delete(m.id); p.ok(m); } return; }
+    this.kabari(m);
+  },
+  kabari(m) { this.pendengar.forEach(f => { try { f(m); } catch (e) { console.error(e); } }); },
+  async rpc(a, d, tok, batasMs) {
+    await this.buka();
+    const id = ++this.seq;
+    return new Promise((ok, no) => {
+      const t = setTimeout(() => { this.tunggu.delete(id); no(Object.assign(new Error('Server tidak menjawab'), { code: 'NET' })); }, batasMs || 45000);
+      this.tunggu.set(id, { ok: m => { clearTimeout(t); ok(m); }, no: e => { clearTimeout(t); no(e); } });
+      if (!this.kirim({ t: 'rpc', id, a, d, tok })) { clearTimeout(t); this.tunggu.delete(id); no(Object.assign(new Error('Koneksi terputus'), { code: 'NET' })); }
+    });
+  }
+};
+const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+/** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
+async function apiSok(action, data, tok, onAuth) {
+  if (!Sok.tersedia()) return null;
+  for (let i = 0; i < 3; i++) {
+    let j;
+    try { j = await Sok.rpc(action, data, tok, AKSI_LAMA.has(action) ? 180000 : 45000); } catch (e) { return null; }
+    if (j.ok) return { data: j.data };
+    const e = Object.assign(new Error(j.error || 'Terjadi kesalahan'), { code: j.code });
+    if (j.code === 'AUTH') { onAuth(); throw e; }
+    if (j.code !== 'BUSY') throw e;
+    await sleep(700 * 2 ** i * (0.5 + Math.random()));
+  }
+  return null;
+}
+
 async function api(action, data = {}, opt = {}) {
   if (!API_URL) throw new Error('Alamat server (API_URL) belum diatur');
+  if (!opt.http) { const r = await apiSok(action, data, tokenSesi, () => onAuthGagal()); if (r) return r.data; }
   const body = JSON.stringify({ action, data, token: tokenSesi });
   const maks = opt.retry ?? 4, batasMs = opt.maksJeda ?? 8000;
   let terakhir;
@@ -562,7 +648,9 @@ const app = Vue.createApp({
     syncTeks() { this.tik; return this.sync === 'offline' ? 'Offline — jawaban aman di perangkat' : this.sync === 'proses' ? 'Menyimpan ke server…' : (this.terakhirSync ? 'Tersimpan di server ' + fmtJam(this.terakhirSync) : 'Jawaban tersimpan di perangkat'); }
   },
   created() {
-    this.wsGagal = 0; this.wsMati = true; this.wsBuka = false; this.ws = null; this.terakhirKirim = -999; this.terakhirHttp = 0;
+    this.wsGagal = 0; this.wsMati = true; this.wsBuka = false; this.terakhirKirim = -999; this.terakhirHttp = 0;
+    Sok.aturWaktu = n => { offset = n - Date.now(); };
+    Sok.pendengar.add(m => this.pesanWs(m));
     onAuthGagal = () => { if (this.layar !== 'ujian') { this.bersihSesi(); this.layar = 'login'; this.err = 'Sesi berakhir, silakan masuk lagi.'; } };
     if (this.layar === 'daftar') this.muatDaftar();
     else if (this.apiSiap && Date.now() - Number(localStorage.getItem('cbt_s_sekolah_t') || 0) > 86400000) {
@@ -680,18 +768,11 @@ const app = Vue.createApp({
     sambung() {
       clearTimeout(this.tWs);
       if (!WS_URL || this.wsMati || !this.uj || this.layar !== 'ujian') return;
-      if (this.ws) { const lama = this.ws; this.ws = null; try { lama.close(1000); } catch (e) {} }
-      let ws;
-      try { ws = new WebSocket(WS_URL + '?' + new URLSearchParams({ t: tokenSesi, u: this.uj.ujian.id, p: perangkatId() })); }
-      catch (e) { this.wsGagal++; this.jadwalSambung(); return; }
-      this.ws = ws; this.wsBuka = false;
-      ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this.pesanWs(m); };
-      ws.onclose = () => {
-        if (this.ws !== ws) return;
-        this.ws = null; this.wsBuka = false;
-        if (this.tungguHasil) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
-        if (this.layar === 'ujian' && !this.wsMati) { this.wsGagal++; if (this.kotor) this.sync = 'offline'; this.jadwalSambung(); }
-      };
+      // memakai koneksi tunggal aplikasi: tidak menambah request bila koneksi sudah terbuka
+      Sok.buka().then(() => {
+        if (this.wsMati || !this.uj || this.layar !== 'ujian') return;
+        Sok.kirim({ t: 'ikut', tok: tokenSesi, u: this.uj.ujian.id, p: perangkatId() });
+      }).catch(() => { this.wsGagal++; this.jadwalSambung(); });
     },
     jadwalSambung() {
       clearTimeout(this.tWs);
@@ -701,11 +782,21 @@ const app = Vue.createApp({
     },
     putus() {
       this.wsMati = true; clearTimeout(this.tWs);
-      const ws = this.ws; this.ws = null; this.wsBuka = false;
-      if (ws) try { ws.close(1000); } catch (e) {}
+      if (this.wsBuka) Sok.kirim({ t: 'lepas' });   // koneksi tetap terbuka untuk daftar ujian
+      this.wsBuka = false;
     },
     pesanWs(m) {
       if (m.now) offset = m.now - Date.now();
+      if (m.t === 'tik' || m.t === '_buka') return;
+      if (this.layar !== 'ujian' || !this.uj || this.wsMati) return;
+      if (m.t === '_tutup') {
+        this.wsBuka = false;
+        if (this.tungguHasil) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
+        this.wsGagal++; if (this.kotor) this.sync = 'offline'; this.jadwalSambung();
+        return;
+      }
+      if (m.t === 'perlu_ikut') { this.wsBuka = false; this.sambung(); return; }
+      if (m.t === 'err' && m.k === 'pantau') return;
       if (m.t === 'hai') {
         this.wsBuka = true; this.wsGagal = 0;
         if (m.deadline && this.uj) { this.uj.deadline = m.deadline; this.hitungSisa(); }
@@ -729,8 +820,8 @@ const app = Vue.createApp({
       }
     },
     kirimJawaban(segera) {
-      if (!this.ws || !this.wsBuka) return;
-      try { this.ws.send(JSON.stringify({ t: 'j', j: this.jw, p: this.pelanggaran, v: this.versiLokal })); this.terakhirKirim = this.tik; if (!segera) this.sync = 'proses'; } catch (e) {}
+      if (!this.wsBuka) return;
+      if (Sok.kirim({ t: 'j', j: this.jw, p: this.pelanggaran, v: this.versiLokal })) { this.terakhirKirim = this.tik; if (!segera) this.sync = 'proses'; }
     },
     selesaiWs(alasan) {
       return new Promise((ok, gagal) => {
@@ -741,8 +832,7 @@ const app = Vue.createApp({
           ok: d => { clearTimeout(habis); this.tungguHasil = null; ok(d); },
           gagal: m => { clearTimeout(habis); this.tungguHasil = null; gagal(Object.assign(new Error(m.msg || 'Gagal'), { code: m.code || 'NET' })); }
         };
-        try { this.ws.send(JSON.stringify({ t: 'selesai', id, j: this.jw, p: this.pelanggaran, a: alasan ? alasan.toLowerCase() : '' })); }
-        catch (e) { this.tungguHasil.gagal({ code: 'NET', msg: e.message }); }
+        if (!Sok.kirim({ t: 'selesai', id, j: this.jw, p: this.pelanggaran, a: alasan ? alasan.toLowerCase() : '' })) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
       });
     },
     akhiriServer(r) { this.akhiri({ ...r, nama: this.uj ? this.uj.ujian.nama : '', alasan: /otomatis|waktu/.test(r.catatan || '') ? 'waktu habis' : (r.catatan ? 'dihentikan pengawas' : '') }); },
@@ -806,7 +896,7 @@ const app = Vue.createApp({
       if (alasan === 'Waktu habis') await sleep(Math.random() * 8000); // sebar beban saat semua siswa habis waktu bersamaan
       try {
         let r = null;
-        if (this.ws && this.wsBuka) {
+        if (this.wsBuka && Sok.terbuka()) {
           try { r = await this.selesaiWs(alasan); }
           catch (e) { if (e.code && e.code !== 'NET' && e.code !== 'BUSY') throw e; r = null; }
         }

@@ -8,7 +8,7 @@ memasang ulang aplikasi dalam 1–2 menit.
 | `public/guru/` | Aplikasi guru & admin |
 | `public/siswa/` | Aplikasi siswa |
 | `src/` | Backend: Worker + Durable Object "Engine" |
-| `wrangler.jsonc` | Pengaturan Cloudflare — **ganti `namaakun`** dengan nama akun GitHub Anda |
+| `wrangler.jsonc` | Pengaturan Cloudflare (nama repo GitHub Anda sudah terisi) |
 | `test/` | Uji otomatis (untuk pengembang) |
 | `PANDUAN.md` | Panduan lengkap pemakaian & pemecahan masalah |
 
