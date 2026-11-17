@@ -1,6 +1,6 @@
 {
   "name": "cbt-sekolah-cloudflare",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "CBT Sekolah — backend Cloudflare Workers + D1 + Durable Objects (paket gratis)",
   "scripts": {

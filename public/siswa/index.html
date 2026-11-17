@@ -281,7 +281,7 @@ p{margin:0}
             <ul>
               <li>Waktu berjalan sejak tombol mulai ditekan dan tidak berhenti meski halaman ditutup.</li>
               <li>Jangan keluar dari halaman ini atau membuka aplikasi lain. Setiap kali keluar akan dicatat.</li>
-              <li>Jawaban tersimpan otomatis. Jika koneksi putus, lanjutkan saja, jawaban dikirim saat koneksi kembali.</li>
+              <li>Jawaban tersimpan otomatis di perangkat ini. Jika koneksi putus, lanjutkan saja: jawaban dikirim saat Anda menekan <b>Selesai</b> (pastikan internet menyala saat itu).</li>
             </ul>
             <p v-if="pilihan.keterangan" style="margin-top:8px"><b>Pesan pengawas:</b> {{ pilihan.keterangan }}</p>
           </div>
@@ -412,7 +412,7 @@ p{margin:0}
       <div class="modal">
         <h2>{{ alasanKirim ? alasanKirim : 'Mengirim jawaban' }}</h2>
         <p v-if="!gagalKirim">Mengirim jawaban ke server… Jangan tutup halaman ini.</p>
-        <template v-else><p>Jawaban belum terkirim karena koneksi bermasalah. Jawaban Anda aman tersimpan di perangkat ini.</p>
+        <template v-else><p>Jawaban belum terkirim karena tidak ada internet. Jawaban Anda aman tersimpan di perangkat ini dan dikirim otomatis begitu internet menyala. Jangan hapus data browser.</p>
           <div class="aksi"><button class="btn btn-tinta" @click="kirim(alasanKirim)">Coba kirim lagi</button></div></template>
       </div>
     </div>
@@ -455,10 +455,12 @@ p{margin:0}
    ===================================================================== */
 const API_URL = window.CBT_API_URL || '/api';
 
-const SIMPAN_DETIK = window.CBT_SIMPAN_DETIK || 60;       // kirim jawaban ke server tiap 60 detik bila ada perubahan (lewat WebSocket: hemat kuota)
-const HTTP_SIMPAN_DETIK = 180;   // cadangan lewat HTTP bila WebSocket tidak bisa tersambung
-const DAFTAR_MENIT = 15;         // daftar ujian disegarkan dari server tiap 15 menit (status jadwal dihitung di perangkat)
-const WS_GAGAL_MAKS = 6;         // setelah 6 kali gagal tersambung, coba lagi hanya tiap 10 menit (hemat kuota)
+// HEMAT KUOTA: 1 kali ujian = 1 request. Koneksi dibuka sekali (login/mulai) dan TIDAK disambung ulang selama ujian.
+// Jawaban disimpan di perangkat dan dikirim saat Selesai. Selama koneksi masih terbuka, cadangan jawaban ikut dikirim
+// tiap 5 menit (tidak menambah request). Bila koneksi sempat putus, menekan Selesai membuka 1 koneksi baru.
+const SIMPAN_DETIK = window.CBT_SIMPAN_DETIK || 300;
+const DAFTAR_MENIT = 15;         // daftar ujian disegarkan tiap 15 menit, hanya bila koneksi masih terbuka
+const KIRIM_ULANG_DETIK = 120;   // jawaban belum terkirim (offline): dicoba lagi tiap 2 menit & saat internet kembali
 const WS_URL = (() => {
   try { const u = new URL(API_URL, location.href); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'; u.pathname = u.pathname.replace(/\/+$/, '') + '/ws'; u.search = ''; return u.href; }
   catch (e) { return ''; }
@@ -498,6 +500,17 @@ function perangkatId() {
   return id;
 }
 let tokenSesi = localStorage.getItem('cbt_s_token') || '';
+// paket ujian yang sedang dikerjakan (soal, batas waktu, jam server) disimpan di perangkat:
+// muat ulang halaman / menutup-membuka aplikasi melanjutkan ujian TANPA menghubungi server.
+const kunciPaket = (nis, uid) => 'cbt_pk_' + nis + '_' + uid;
+function paketLokal(nis, uid) { try { const v = JSON.parse(localStorage.getItem(kunciPaket(nis, uid)) || 'null'); return v && v.paket ? v : null; } catch (e) { return null; } }
+function semuaPaket(nis) {
+  const out = [];
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i) || ''; if (k.startsWith('cbt_pk_' + nis + '_')) { const v = JSON.parse(localStorage.getItem(k) || 'null'); if (v && v.paket) out.push(v); } } } catch (e) {}
+  return out.sort((a, b) => b.paket.mulai - a.paket.mulai);
+}
+function simpanPaket(o) { try { localStorage.setItem(kunciPaket(o.nis, o.u.id), JSON.stringify(o)); return true; } catch (e) { return false; } }
+function hapusPaket(nis, uid) { try { localStorage.removeItem(kunciPaket(nis, uid)); } catch (e) {} try { sessionStorage.removeItem('cbt_aktif'); } catch (e) {} }
 let onAuthGagal = () => {};
 
 const errKuota = () => Object.assign(new Error('Server ujian mencapai batas harian. Lapor ke pengawas — jawaban Anda tetap aman di perangkat ini.'), { code: 'KUOTA' });
@@ -645,14 +658,24 @@ const app = Vue.createApp({
     belumNo() { return this.uj.soal.map((s, i) => this.terjawab(s) ? 0 : i + 1).filter(Boolean); },
     raguNo() { return this.uj.soal.map((s, i) => this.ragu(s.id) ? i + 1 : 0).filter(Boolean); },
     sisaTeks() { const s = Math.max(0, this.sisaDetik), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), d = s % 60, p = n => String(n).padStart(2, '0'); return (h ? h + ':' : '') + p(m) + ':' + p(d); },
-    syncTeks() { this.tik; return this.sync === 'offline' ? 'Offline — jawaban aman di perangkat' : this.sync === 'proses' ? 'Menyimpan ke server…' : (this.terakhirSync ? 'Tersimpan di server ' + fmtJam(this.terakhirSync) : 'Jawaban tersimpan di perangkat'); }
+    syncTeks() {
+      this.tik;
+      if (this.sync === 'proses') return 'Menyimpan cadangan ke server…';
+      if (this.sync === 'lokal') return 'Jawaban tersimpan di perangkat · dikirim saat Selesai';
+      return this.terakhirSync ? 'Tersimpan di server ' + fmtJam(this.terakhirSync) : 'Jawaban tersimpan di perangkat';
+    }
   },
   created() {
-    this.wsGagal = 0; this.wsMati = true; this.wsBuka = false; this.terakhirKirim = -999; this.terakhirHttp = 0;
+    this.wsMati = true; this.wsBuka = false; this.terakhirKirim = -999; this.terakhirCoba = 0;
     Sok.aturWaktu = n => { offset = n - Date.now(); };
     Sok.pendengar.add(m => this.pesanWs(m));
     onAuthGagal = () => { if (this.layar !== 'ujian') { this.bersihSesi(); this.layar = 'login'; this.err = 'Sesi berakhir, silakan masuk lagi.'; } };
-    if (this.layar === 'daftar') this.muatDaftar();
+    // internet kembali → jawaban yang belum terkirim langsung dicoba kirim lagi
+    window.addEventListener('online', () => { if (this.dlg === 'kirim' && this.gagalKirim && !this.mengirim) this.kirim(this.alasanKirim); });
+    // ujian yang sedang berjalan dilanjutkan dari perangkat (tanpa menghubungi server)
+    const aktif = tokenSesi && this.user.nis ? semuaPaket(this.user.nis)[0] : null;
+    if (aktif) { this.pilihan = aktif.u; this.lanjutLokal(aktif, false); }
+    else if (this.layar === 'daftar') this.muatDaftar();
     else if (this.apiSiap && Date.now() - Number(localStorage.getItem('cbt_s_sekolah_t') || 0) > 86400000) {
       // nama sekolah disimpan di perangkat, ditanyakan ke server maksimal sekali sehari
       api('ping', {}, { retry: 1 }).then(r => { this.sekolah = r; localStorage.setItem('cbt_s_sekolah', JSON.stringify(r)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now())); }).catch(() => {});
@@ -663,11 +686,9 @@ const app = Vue.createApp({
       // status jadwal dihitung di perangkat → tidak perlu bertanya ke server tiap menit
       const t = now();
       this.daftar.forEach(u => { const j = t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung'; if (u.jadwal !== j) u.jadwal = j; });
-      if (!document.hidden && Date.now() - (this.daftarT || 0) > DAFTAR_MENIT * 60000 * (0.8 + Math.random() * 0.4)) this.muatDaftar(true);
+      // disegarkan hanya bila koneksi masih terbuka (tidak membuka koneksi baru = tidak menambah request)
+      if (!document.hidden && Sok.terbuka() && Date.now() - (this.daftarT || 0) > DAFTAR_MENIT * 60000 * (0.8 + Math.random() * 0.4)) this.muatDaftar(true);
     }, 1000);
-    // lanjutkan otomatis setelah halaman dimuat ulang saat ujian
-    const aktif = JSON.parse(sessionStorage.getItem('cbt_aktif') || 'null');
-    if (aktif && tokenSesi) { this.pilihan = aktif.u; this.tokenUjian = aktif.token || ''; this.layar = 'konfirmasi'; this.$nextTick(() => this.mulai(true)); }
   },
   methods: {
     fmt, polos, huruf, fmtJam, fmtHari, hurufKanan: i => 'PQRSTUVWXYZKLMNO'[i] || String(i + 1),
@@ -684,46 +705,72 @@ const app = Vue.createApp({
         this.f.pw = ''; this.layar = 'daftar'; this.muatDaftar();
       } catch (e) { this.err = e.message; } finally { this.sibuk = false; }
     },
-    bersihSesi() { tokenSesi = ''; localStorage.removeItem('cbt_s_token'); localStorage.removeItem('cbt_s_user'); sessionStorage.removeItem('cbt_aktif'); },
+    bersihSesi() { tokenSesi = ''; localStorage.removeItem('cbt_s_token'); localStorage.removeItem('cbt_s_user'); },
     keluar() { this.bersihSesi(); this.user = {}; this.daftar = null; this.layar = 'login'; },
     async muatDaftar(diam) {
       if (!diam) this.err = '';
       this.daftarT = Date.now();
       try {
         const list = await api('ujianSaya', {}, { retry: diam ? 1 : 3 });
-        // ujian yang sedang dikerjakan di perangkat ini (jawaban tersimpan lokal) → tombol "Lanjutkan"
-        const lokal = new Set(); try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i) || ''; if (k.startsWith('cbt_jw_')) lokal.add(k.split('_')[2]); } } catch (e) {}
-        list.forEach(u => { if (u.status === 'belum' && u.jadwal === 'berlangsung' && lokal.has(u.id)) u.status = 'mengerjakan'; });
+        // ujian yang jawabannya masih ada di perangkat ini (belum terkirim) → tombol "Lanjutkan"
+        list.forEach(u => {
+          if (!paketLokal(this.user.nis, u.id)) return;
+          if (u.status === 'selesai' && !u.susulan) hapusPaket(this.user.nis, u.id);   // sudah diterima server
+          else u.status = 'mengerjakan';
+        });
         this.daftar = list;
       }
       catch (e) { if (!diam) this.err = e.message; if (!this.daftar) this.daftar = []; }
     },
-    pilih(u) { this.pilihan = u; this.tokenUjian = ''; this.err = ''; this.layar = 'konfirmasi'; },
-    keDaftar() { this.layar = 'daftar'; this.daftar = null; this.muatDaftar(); },
+    pilih(u) {
+      this.pilihan = u; this.tokenUjian = ''; this.err = '';
+      if (paketLokal(this.user.nis, u.id)) return this.mulai(false);   // lanjutkan dari perangkat, tanpa token & tanpa server
+      this.layar = 'konfirmasi';
+    },
+    keDaftar() {
+      this.layar = 'daftar';
+      // koneksi masih terbuka → ambil daftar terbaru (tanpa request baru); sudah putus → perbarui di perangkat saja
+      if (Sok.terbuka() || !this.daftar) { this.daftar = null; this.muatDaftar(); return; }
+      const h = this.hasil, u = h && this.daftar.find(x => x.id === h.uid);
+      if (u) { u.status = 'selesai'; if (h.nilai !== undefined) { u.nilai = h.nilai; u.perluKoreksi = h.perluKoreksi; } }
+      this.daftar.forEach(x => { if (x.status === 'mengerjakan' && !paketLokal(this.user.nis, x.id) && x.id !== (this.pilihan && this.pilihan.id)) x.status = 'belum'; });
+    },
 
     async mulai(otomatis) {
-      this.err = ''; this.sibuk = true;
+      this.err = '';
+      const ada = paketLokal(this.user.nis, this.pilihan.id);
+      if (ada) return this.lanjutLokal(ada, otomatis !== true);
+      this.sibuk = true;
       try {
         const r = await api('mulaiUjian', { ujianId: this.pilihan.id, token: this.tokenUjian, perangkat: perangkatId() }, { retry: 6 });
-        this.kunciLokal = 'cbt_jw_' + this.pilihan.id + '_' + this.user.nis + '_' + r.mulai;
-        const lokal = JSON.parse(localStorage.getItem(this.kunciLokal) || 'null');
-        this.jw = lokal ? lokal.jw : (r.jawaban && r.jawaban.j ? { j: r.jawaban.j, r: r.jawaban.r || [] } : { j: {}, r: [] });
-        this.pelanggaran = Math.max(r.pelanggaran || 0, lokal ? lokal.pelanggaran || 0 : 0);
-        this.idx = lokal && lokal.idx < r.soal.length ? lokal.idx : 0;
-        this.uj = r; this.kotor = !!lokal; this.terakhirSync = 0; this.sync = 'ok'; this.dlg = ''; this.yakin = false; this.gagalKirim = false;
-        sessionStorage.setItem('cbt_aktif', JSON.stringify({ u: this.pilihan, token: this.tokenUjian }));
-        this.layar = 'ujian';
-        this.pasangPenjaga(otomatis !== true);
-        this.hitungSisa();
-        this.wsMati = false; this.wsGagal = 0; this.terakhirKirim = -999; this.terakhirHttp = this.tik;
-        this.sambung();
-        if (this.sisaDetik <= 0) this.kirim('Waktu habis');
+        const kunci = 'cbt_jw_' + this.pilihan.id + '_' + this.user.nis + '_' + r.mulai;
+        simpanPaket({ nis: this.user.nis, u: this.pilihan, kunci, paket: r, offset });
+        this.siapkan(r, kunci, otomatis !== true);
       } catch (e) {
-        sessionStorage.removeItem('cbt_aktif');
         if (e.code === 'SELESAI') { this.toast(e.message); this.keDaftar(); }
         else { this.err = e.message; if (this.layar !== 'konfirmasi') this.layar = 'konfirmasi'; }
       } finally { this.sibuk = false; }
     },
+    /** Lanjutkan ujian dari paket di perangkat (setelah muat ulang / tutup-buka aplikasi): tanpa menghubungi server. */
+    lanjutLokal(a, gestur) {
+      if (!Sok.terbuka() && typeof a.offset === 'number') offset = a.offset;
+      this.siapkan(a.paket, a.kunci, gestur);
+    },
+    siapkan(r, kunci, gestur) {
+      this.kunciLokal = kunci;
+      let lokal = null; try { lokal = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
+      this.jw = lokal ? lokal.jw : (r.jawaban && r.jawaban.j ? { j: r.jawaban.j, r: r.jawaban.r || [] } : { j: {}, r: [] });
+      this.pelanggaran = Math.max(r.pelanggaran || 0, lokal ? lokal.pelanggaran || 0 : 0);
+      this.idx = lokal && lokal.idx < r.soal.length ? lokal.idx : 0;
+      this.uj = r; this.kotor = !!lokal; this.terakhirSync = 0; this.sync = 'lokal'; this.dlg = ''; this.yakin = false; this.gagalKirim = false;
+      this.layar = 'ujian';
+      this.pasangPenjaga(gestur);
+      this.hitungSisa();
+      this.wsMati = false; this.terakhirKirim = this.tik;
+      this.sambung();
+      if (this.sisaDetik <= 0) this.kirim('Waktu habis');
+    },
+    hapusPaketIni() { const uid = this.uj ? this.uj.ujian.id : (this.pilihan && this.pilihan.id); if (uid) hapusPaket(this.user.nis, uid); },
     layarPenuh() { const d = document.documentElement; if (!document.fullscreenElement && d.requestFullscreen) d.requestFullscreen().catch(() => {}); },
     pasangPenjaga(gestur) {
       if (gestur) this.layarPenuh(); else this.perluFullscreen = !document.fullscreenElement && !!document.documentElement.requestFullscreen;
@@ -734,7 +781,7 @@ const app = Vue.createApp({
         if (Date.now() - (this.terakhirLanggar || 0) < 1500) return;
         this.terakhirLanggar = Date.now();
         this.pelanggaran++; this.kotor = true; this.versiLokal++; this.simpanLokal();
-        if (this.wsBuka && this.tik - this.terakhirKirim >= 10) this.kirimJawaban(true);
+        if (this.wsBuka && this.tik - this.terakhirKirim >= 10) this.kirimJawaban(true);   // lewat koneksi yang masih terbuka saja
         const maks = this.uj.ujian.maxPelanggaran;
         if (maks && this.pelanggaran >= maks) this.kirim('Batas keluar halaman tercapai');
         else this.dlg = 'langgar';
@@ -743,11 +790,7 @@ const app = Vue.createApp({
         vis: () => { if (document.hidden) langgar(); },
         blur: () => langgar(),
         fsc: () => { this.perluFullscreen = !document.fullscreenElement && !!document.documentElement.requestFullscreen; },
-        unload: () => {
-          if (!this.kotor) return;
-          if (this.wsBuka) this.kirimJawaban(true);
-          else try { navigator.sendBeacon(API_URL + '?a=simpanJawaban', JSON.stringify({ action: 'simpanJawaban', token: tokenSesi, data: this.dataSync() })); } catch (e) {}
-        },
+        unload: () => { if (this.kotor && this.wsBuka) this.kirimJawaban(true); },   // jawaban tetap aman di perangkat
         before: e => { if (this.layar === 'ujian' && this.dlg !== 'kirim') { e.preventDefault(); e.returnValue = ''; } },
         key: e => { if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || this.dlg) return; if (e.key === 'ArrowRight') this.ke(this.idx + 1); if (e.key === 'ArrowLeft') this.ke(this.idx - 1); }
       };
@@ -758,30 +801,21 @@ const app = Vue.createApp({
         this.hitungSisa(); this.tik++;
         if (this.sisaDetik === 300) this.toast('Sisa waktu 5 menit', 'err', 5000);
         if (this.sisaDetik <= 0 && this.dlg !== 'kirim') this.kirim('Waktu habis');
-        if (this.kotor) {
-          if (this.wsBuka) { if (this.tik - this.terakhirKirim >= SIMPAN_DETIK) this.kirimJawaban(); }
-          else if ((!WS_URL || this.wsMati || this.wsGagal >= 3) && this.tik - this.terakhirHttp >= HTTP_SIMPAN_DETIK) { this.terakhirHttp = this.tik; this.syncServer(true); }
-        }
+        // cadangan jawaban hanya lewat koneksi yang masih terbuka (tidak membuka koneksi baru)
+        if (this.kotor && this.wsBuka && this.tik - this.terakhirKirim >= SIMPAN_DETIK) this.kirimJawaban();
+        // jawaban akhir belum terkirim karena offline → coba lagi berkala
+        if (this.dlg === 'kirim' && this.gagalKirim && !this.mengirim && navigator.onLine !== false && this.tik - this.terakhirCoba >= KIRIM_ULANG_DETIK) this.kirim(this.alasanKirim);
       }, 1000);
     },
     // ---- koneksi langsung (WebSocket) ----
+    // Hanya memakai koneksi yang SUDAH terbuka (dibuka saat login/mulai). Selama ujian TIDAK membuka koneksi baru:
+    // bila koneksi putus, siswa tetap mengerjakan dan jawaban dikirim saat Selesai.
     sambung() {
-      clearTimeout(this.tWs);
-      if (!WS_URL || this.wsMati || !this.uj || this.layar !== 'ujian') return;
-      // memakai koneksi tunggal aplikasi: tidak menambah request bila koneksi sudah terbuka
-      Sok.buka().then(() => {
-        if (this.wsMati || !this.uj || this.layar !== 'ujian') return;
-        Sok.kirim({ t: 'ikut', tok: tokenSesi, u: this.uj.ujian.id, p: perangkatId() });
-      }).catch(() => { this.wsGagal++; this.jadwalSambung(); });
-    },
-    jadwalSambung() {
-      clearTimeout(this.tWs);
-      // tiap percobaan = 1 request kuota → jeda makin panjang, lalu tiap 10 menit bila terus gagal (jawaban tetap dikirim lewat HTTP)
-      const d = this.wsGagal >= WS_GAGAL_MAKS ? 600000 * (0.8 + Math.random() * 0.4) : Math.min(30000, 1000 * 2 ** Math.min(this.wsGagal, 5)) * (0.5 + Math.random());
-      this.tWs = setTimeout(() => this.sambung(), d);
+      if (this.wsMati || !this.uj || this.layar !== 'ujian' || !Sok.terbuka()) { this.wsBuka = false; this.sync = 'lokal'; return; }
+      Sok.kirim({ t: 'ikut', tok: tokenSesi, u: this.uj.ujian.id, p: perangkatId() });
     },
     putus() {
-      this.wsMati = true; clearTimeout(this.tWs);
+      this.wsMati = true;
       if (this.wsBuka) Sok.kirim({ t: 'lepas' });   // koneksi tetap terbuka untuk daftar ujian
       this.wsBuka = false;
     },
@@ -789,16 +823,15 @@ const app = Vue.createApp({
       if (m.now) offset = m.now - Date.now();
       if (m.t === 'tik' || m.t === '_buka') return;
       if (this.layar !== 'ujian' || !this.uj || this.wsMati) return;
-      if (m.t === '_tutup') {
-        this.wsBuka = false;
+      if (m.t === '_tutup') {   // tidak disambung ulang: jawaban dikirim saat Selesai
+        this.wsBuka = false; this.sync = 'lokal';
         if (this.tungguHasil) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
-        this.wsGagal++; if (this.kotor) this.sync = 'offline'; this.jadwalSambung();
         return;
       }
       if (m.t === 'perlu_ikut') { this.wsBuka = false; this.sambung(); return; }
       if (m.t === 'err' && m.k === 'pantau') return;
       if (m.t === 'hai') {
-        this.wsBuka = true; this.wsGagal = 0;
+        this.wsBuka = true;
         if (m.deadline && this.uj) { this.uj.deadline = m.deadline; this.hitungSisa(); }
         if (this.kotor) this.kirimJawaban(true); else { this.sync = 'ok'; if (!this.terakhirSync) this.terakhirSync = now(); }
       } else if (m.t === 'ok') {
@@ -815,13 +848,13 @@ const app = Vue.createApp({
         this.direset();
       } else if (m.t === 'err') {
         if (m.id && this.tungguHasil && this.tungguHasil.id === m.id) return this.tungguHasil.gagal(m);
-        if (m.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); sessionStorage.removeItem('cbt_aktif'); this.toast(m.msg, 'err', 8000); this.keDaftar(); }
-        else if (m.code !== 'BUSY') { this.wsMati = true; this.terakhirHttp = this.tik - HTTP_SIMPAN_DETIK + 20; } // pakai HTTP sebagai cadangan
+        if (m.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(m.msg, 'err', 8000); this.keDaftar(); }
+        else if (m.code !== 'BUSY') { this.wsBuka = false; this.sync = 'lokal'; }
       }
     },
     kirimJawaban(segera) {
       if (!this.wsBuka) return;
-      if (Sok.kirim({ t: 'j', j: this.jw, p: this.pelanggaran, v: this.versiLokal })) { this.terakhirKirim = this.tik; if (!segera) this.sync = 'proses'; }
+      if (Sok.kirim({ t: 'j', j: this.jw, p: this.pelanggaran, v: this.versiLokal, mulai: this.uj.mulai })) { this.terakhirKirim = this.tik; if (!segera) this.sync = 'proses'; }
     },
     selesaiWs(alasan) {
       return new Promise((ok, gagal) => {
@@ -832,11 +865,11 @@ const app = Vue.createApp({
           ok: d => { clearTimeout(habis); this.tungguHasil = null; ok(d); },
           gagal: m => { clearTimeout(habis); this.tungguHasil = null; gagal(Object.assign(new Error(m.msg || 'Gagal'), { code: m.code || 'NET' })); }
         };
-        if (!Sok.kirim({ t: 'selesai', id, j: this.jw, p: this.pelanggaran, a: alasan ? alasan.toLowerCase() : '' })) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
+        if (!Sok.kirim({ t: 'selesai', id, j: this.jw, p: this.pelanggaran, a: alasan ? alasan.toLowerCase() : '', mulai: this.uj.mulai })) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
       });
     },
     akhiriServer(r) { this.akhiri({ ...r, nama: this.uj ? this.uj.ujian.nama : '', alasan: /otomatis|waktu/.test(r.catatan || '') ? 'waktu habis' : (r.catatan ? 'dihentikan pengawas' : '') }); },
-    direset() { this.putus(); this.lepasPenjaga(); sessionStorage.removeItem('cbt_aktif'); try { localStorage.removeItem(this.kunciLokal); } catch (e) {} this.toast('Ujian Anda direset oleh pengawas. Silakan mulai lagi.', 'err', 7000); this.keDaftar(); },
+    direset() { this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); try { localStorage.removeItem(this.kunciLokal); } catch (e) {} this.uj = null; this.toast('Ujian Anda direset oleh pengawas. Silakan mulai lagi.', 'err', 7000); this.keDaftar(); },
     lepasPenjaga() {
       clearInterval(this.tUjian);
       if (!this.h) return;
@@ -872,7 +905,7 @@ const app = Vue.createApp({
     ke(i) { if (i < 0 || i >= this.uj.soal.length) return; this.idx = i; this.ljkBuka = false; window.scrollTo({ top: 0 }); this.simpanLokal(); },
     tandaiUbah() { this.kotor = true; this.versiLokal++; this.simpanLokal(); },
     simpanLokal() { try { localStorage.setItem(this.kunciLokal, JSON.stringify({ jw: this.jw, pelanggaran: this.pelanggaran, idx: this.idx, t: Date.now() })); } catch (e) {} },
-    dataSync() { return { ujianId: this.uj.ujian.id, jawaban: this.jw, pelanggaran: this.pelanggaran, perangkat: perangkatId() }; },
+    dataSync() { return { ujianId: this.uj.ujian.id, jawaban: this.jw, pelanggaran: this.pelanggaran, perangkat: perangkatId(), mulai: this.uj.mulai }; },
     async syncServer(diam) {
       if (this.syncJalan || !this.uj) return;
       this.syncJalan = true; const versi = this.versiLokal;
@@ -885,14 +918,14 @@ const app = Vue.createApp({
         else if (r.status === 'direset' || r.status === 'belum') this.direset();
         else if (r.deadline) this.uj.deadline = r.deadline;
       } catch (e) {
-        if (e.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); sessionStorage.removeItem('cbt_aktif'); this.toast(e.message, 'err', 8000); this.keDaftar(); }
-        else this.sync = 'offline';
+        if (e.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(e.message, 'err', 8000); this.keDaftar(); }
+        else this.sync = 'lokal';
       } finally { this.syncJalan = false; }
     },
     bukaSelesai() { this.ljkBuka = false; this.yakin = false; this.dlg = 'selesai'; },
     async kirim(alasan) {
       if (this.mengirim) return;
-      this.mengirim = true; this.alasanKirim = alasan; this.gagalKirim = false; this.dlg = 'kirim';
+      this.mengirim = true; this.alasanKirim = alasan; this.gagalKirim = false; this.dlg = 'kirim'; this.terakhirCoba = this.tik;
       if (alasan === 'Waktu habis') await sleep(Math.random() * 8000); // sebar beban saat semua siswa habis waktu bersamaan
       try {
         let r = null;
@@ -900,21 +933,27 @@ const app = Vue.createApp({
           try { r = await this.selesaiWs(alasan); }
           catch (e) { if (e.code && e.code !== 'NET' && e.code !== 'BUSY') throw e; r = null; }
         }
-        if (!r) r = await api('selesaiUjian', { ...this.dataSync(), alasan: alasan ? alasan.toLowerCase() : '' }, { retry: 9, maksJeda: 15000 });
+        // koneksi sempat putus → buka 1 koneksi baru khusus untuk mengirim jawaban akhir
+        if (!r) r = await api('selesaiUjian', { ...this.dataSync(), alasan: alasan ? alasan.toLowerCase() : '' }, { retry: 3, maksJeda: 15000 });
         this.akhiri({ ...r, nama: this.uj.ujian.nama, alasan: alasan ? alasan.toLowerCase() : '' });
       } catch (e) {
-        if (e.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); this.toast(e.message, 'err', 8000); this.keDaftar(); }
-        else this.gagalKirim = true;
+        if (e.code === 'PERANGKAT') { this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(e.message, 'err', 8000); this.keDaftar(); }
+        else if (e.code === 'DIRESET') this.direset();
+        else if (e.code === 'AUTH') {   // sesi login kedaluwarsa: masuk lagi, jawaban tetap di perangkat lalu dikirim
+          this.lepasPenjaga(); this.uj = null; this.dlg = ''; this.bersihSesi(); this.layar = 'login';
+          this.err = 'Sesi berakhir. Masuk lagi untuk mengirim jawaban yang tersimpan di perangkat ini.';
+        }
+        else { this.gagalKirim = true; this.terakhirCoba = this.tik; }
       } finally { this.mengirim = false; }
     },
     akhiri(hasil) {
       if (this.layar !== 'ujian' && !this.uj) return;
       this.putus();
       this.lepasPenjaga();
+      this.hapusPaketIni();
       try { localStorage.removeItem(this.kunciLokal); } catch (e) {}
-      sessionStorage.removeItem('cbt_aktif');
       if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
-      this.hasil = hasil; this.dlg = ''; this.uj = null; this.layar = 'selesai';
+      this.hasil = { ...hasil, uid: this.uj ? this.uj.ujian.id : '' }; this.dlg = ''; this.uj = null; this.layar = 'selesai';
     }
   }
 });

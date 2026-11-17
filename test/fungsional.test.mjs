@@ -131,14 +131,15 @@ const ws1 = wsBuka({ t: S1, u: U.id, p: 'devA' });
 await ws1.terbuka;
 const hai = await ws1.tunggu(m => m.t === 'hai');
 ok('WS hai + deadline', hai && hai.deadline > Date.now(), hai);
+while (await mon.tunggu(m => m.t === 'diff', 4500)) {}   // habiskan diff status "mulai"
 ws1.kirimJ({ t: 'j', j: { j: J, r: [full.soal[0].id] }, p: 1, v: 7 });
 const ack = await ws1.tunggu(m => m.t === 'ok');
-ok('WS autosave di-ack', ack && ack.v === 7 && ack.status === 'mengerjakan', ack);
-const diff = await mon.tunggu(m => m.t === 'diff' && m.rows.some(x => x.nis === '1001' && x.terjawab === 8), 9000);
-const p1 = diff && diff.rows.find(x => x.nis === '1001');
-ok('monitor diff: terjawab 8, ragu 1, pelanggaran 1, online', p1 && p1.terjawab === 8 && p1.ragu === 1 && p1.pelanggaran === 1 && p1.online, diff);
+ok('WS autosave (cadangan) di-ack', ack && ack.v === 7 && ack.status === 'mengerjakan', ack);
+const diff = await mon.tunggu(m => m.t === 'diff' && m.rows.some(x => x.nis === '1001'), 6000);
+ok('cadangan jawaban TIDAK memicu monitor (monitor hanya status)', !diff, diff);
 r = await call('monitorUjian', { ujianId: U.id }, ADM);
-ok('monitor HTTP sama', r.data.peserta.find(p => p.nis === '1001').terjawab === 8);
+const pm = r.data.peserta.find(p => p.nis === '1001');
+ok('monitor hanya status: mengerjakan, tanpa progres', pm.status === 'mengerjakan' && pm.terjawab === undefined && pm.online === undefined, pm);
 ws1.kirimJ({ t: 'selesai', id: 'x1', j: { j: J, r: [] }, p: 1, a: '' });
 const hs = await ws1.tunggu(m => m.t === 'hasil');
 ok('WS selesai: nilai tanpa uraian', hs && hs.data.perluKoreksi === 1, hs);
@@ -198,14 +199,35 @@ r = await call('loginSiswa', { nis: '1002', password: '1002' });
 const S3 = r.data.token;
 r = await call('mulaiUjian', { ujianId: U.id, token: U.token, perangkat: 'devD' }, S3);
 ok('siswa 3 mulai', r.ok);
+const mulai3 = r.data.mulai, soal3 = r.data.soal;
 const ws3 = wsBuka({ t: S3, u: U.id, p: 'devD' }); await ws3.terbuka; await ws3.tunggu(m => m.t === 'hai');
 ws3.kirimJ({ t: 'j', j: { j: { [full.soal[0].id]: full.soal[0].kunci }, r: [] }, p: 0, v: 1 });
 await ws3.tunggu(m => m.t === 'ok');
 ws3.close();
 await dev(61 * 60000 + 3 * 60000, true); // lewati durasi + toleransi, jalankan perawatan
 r = await call('monitorUjian', { ujianId: U.id }, ADM);
-const p3 = r.data.peserta.find(p => p.nis === '1002');
-ok('siswa 3 selesai otomatis dgn nilai dari autosave WS', p3.status === 'selesai' && p3.nilai > 0 && /otomatis/.test(p3.catatan), p3);
+let p3 = r.data.peserta.find(p => p.nis === '1002');
+ok('waktu habis tanpa kiriman perangkat → PENDING (tidak dinilai dari jawaban kosong)', p3.status === 'pending' && p3.nilai === null, p3);
+const mp = await mon.tunggu(m => m.t === 'diff' && m.rows.some(x => x.nis === '1002' && x.status === 'pending'), 6000);
+ok('monitor menerima perubahan status Pending', !!mp);
+r = await call('hasilUjian', { ujianId: U.id }, ADM);
+ok('hasil: siswa 3 tampil pending', r.data.peserta.find(p => p.nis === '1002').status === 'pending');
+r = await call('selesaiUjian', { ujianId: U.id, jawaban: { j: { [full.soal[0].id]: full.soal[0].kunci, [full.soal[1].id]: full.soal[1].kunci }, r: [] }, pelanggaran: 0, perangkat: 'devD', mulai: mulai3 + 1 }, S3);
+ok('kiriman dari percobaan lama ditolak (DIRESET)', !r.ok && r.code === 'DIRESET', r);
+// kalau perangkat TIDAK pernah tersambung lagi: 2 jam setelah jadwal ditutup dinilai dari cadangan terakhir
+await dev(U.selesai - Date.now() + 2 * 3600000 + 5 * 60000, true);
+r = await call('monitorUjian', { ujianId: U.id }, ADM);
+p3 = r.data.peserta.find(p => p.nis === '1002');
+ok('pending lama → dinilai otomatis dari cadangan terakhir', p3.status === 'selesai' && p3.nilai > 0 && /otomatis/.test(p3.catatan), p3);
+const n0 = p3.nilai;
+r = await call('ujianSaya', {}, S3);
+ok('siswa: hasil otomatis masih menerima kiriman susulan', r.data.find(u => u.id === U.id).susulan === true, r.data);
+// perangkat tersambung lagi (mis. besok pagi) → jawaban lengkap dari perangkat menggantikan nilai otomatis
+r = await call('selesaiUjian', { ujianId: U.id, jawaban: { j: { [full.soal[0].id]: full.soal[0].kunci, [full.soal[1].id]: full.soal[1].kunci }, r: [] }, pelanggaran: 0, perangkat: 'devD', mulai: mulai3 }, S3);
+ok('jawaban perangkat yang datang terlambat tetap diterima & dinilai', r.ok && r.data.status === 'selesai' && r.data.nilai > n0, [r, n0]);
+r = await call('monitorUjian', { ujianId: U.id }, ADM);
+p3 = r.data.peserta.find(p => p.nis === '1002');
+ok('catatan "terkirim … setelah waktu habis"', /setelah waktu habis/.test(p3.catatan), p3);
 await dev(0);
 monR.close(); mon.close();
 

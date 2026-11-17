@@ -15,9 +15,9 @@ semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama
 | | Apps Script (lama) | Cloudflare (baru) |
 |---|---|---|
 | Permintaan bersamaan | maks. 30, siswa harus antre/dibagi sesi ±300 | ribuan, tanpa antre |
-| Kirim jawaban | HTTP tiap 30 detik (berat) | koneksi langsung (WebSocket) tiap 60 detik, sangat hemat kuota |
-| Kuota per buka aplikasi | setiap klik = 1 permintaan | **1 permintaan** untuk seluruh pemakaian (login, edit soal, jadwal, monitor, ujian, nilai) |
-| Monitoring pengawas | disegarkan tiap 15 detik | **langsung** (berubah sendiri dalam ±4 detik) |
+| Kirim jawaban | HTTP tiap 30 detik (berat) | disimpan di perangkat, dikirim saat Selesai (cadangan tiap 5 menit lewat koneksi yang masih terbuka) |
+| Kuota | setiap klik = 1 permintaan | **1 permintaan per siswa per ujian**; guru 1 permintaan sekali buka aplikasi (edit soal sampai simpan, jadwal, monitor) |
+| Monitoring pengawas | disegarkan tiap 15 detik | status saja: **belum mulai · mengerjakan · pending · selesai**, berubah sendiri |
 | Database utama | GitHub + Google Sheet buffer | Cloudflare D1 (SQL) |
 | GitHub | database | **gambar soal** + **cadangan otomatis** (opsional) |
 | Hosting aplikasi | GitHub Pages | ikut di Cloudflare (satu alamat), GitHub Pages tetap bisa |
@@ -37,16 +37,20 @@ semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama
 
 Diuji di komputer pengembang dengan simulasi Cloudflare resmi (`wrangler dev`):
 
-- **64 uji fungsional** (semua fitur lama: 7 jenis soal, token, kunci perangkat, koreksi, hitung ulang, reset, dll.) — lulus.
-- **Uji beban ujian 90 menit, 1300 siswa + 50 guru memantau, 1 koneksi per orang**: 1300 siswa membuka aplikasi
-  bersamaan lalu login, melihat daftar, mulai ujian (semua siap dalam ±7 detik); jawaban dikirim tiap menit selama
-  90 menit (115.700 kiriman, median 103 ms); di menit ke-89,5 semua menekan *Selesai* pada detik yang sama (semua
-  dinilai dalam ±1,4 detik); 1300 hasil tersimpan. Total kuota: **1.350 permintaan** (1300 siswa + 50 guru),
-  0 permintaan HTTP. Versi sebelumnya untuk alur yang sama: ±8.150 (6 per siswa, 7 per guru, diukur di Chrome).
-- **Uji Chrome hitung permintaan**: guru login → bank soal → edit & simpan → jadwal → monitor → hasil = **1 permintaan**;
-  siswa login → mulai → menjawab → selesai → lihat nilai = **1 permintaan**.
-- **Server dimatikan di tengah ujian** lalu dinyalakan lagi: semua siswa tersambung ulang, jawaban & sisa waktu utuh.
-- Uji di Chrome: monitor guru berubah sendiri saat siswa menjawab dan saat siswa selesai.
+- **Uji fungsional** (semua fitur lama: 7 jenis soal, token, kunci perangkat, koreksi, hitung ulang, reset; plus
+  status Pending, kiriman terlambat, penilaian otomatis bila perangkat tak pernah tersambung) — lulus.
+- **Uji Chrome hitung permintaan** (dihitung dari log server):
+  guru login → bank soal → edit 3× → Simpan → jadwal → monitor 2 ujian = **1**;
+  siswa login → mulai → menjawab → Selesai → nilai → daftar = **1**;
+  siswa yang koneksinya diputus di tengah ujian lalu halamannya dimuat ulang = **2** (ujian lanjut dari perangkat tanpa
+  server, kirim akhir saat Selesai); siswa yang offline saat waktu habis = **2** (monitor menampilkan *Pending*, jawaban
+  terkirim sendiri begitu internet menyala, lalu *Selesai*).
+- **Uji beban ujian 90 menit, 1300 siswa + 50 guru memantau**: 1300 siswa membuka aplikasi bersamaan (semua siap
+  ±6 detik); cadangan jawaban tiap 5 menit; 130 siswa koneksinya putus di menit ke-30 dan tidak menyambung ulang;
+  26 siswa offline saat waktu habis (tampil *Pending*, terkirim belakangan); di menit ke-89,5 semua menekan *Selesai*
+  bersamaan (dinilai dalam ±1,2 detik). **1300 hasil tersimpan, semuanya memakai jawaban lengkap dari perangkat.**
+  Monitor guru tidak menerima data jawaban sama sekali selama ujian. Kuota: **1.506 permintaan**
+  (1300 siswa + 156 kirim akhir dari yang putus/offline + 50 guru), 0 permintaan HTTP.
 - Impor data dari repo GitHub versi Apps Script: akun lama bisa login dengan kata sandi lama, bank soal & hasil lama ikut pindah.
 
 > Uji di atas memakai simulasi di komputer, bukan akun Cloudflare Anda. Sebelum ujian besar, lakukan **uji coba 1–2 kelas** dulu.
@@ -58,8 +62,8 @@ Batas harian paket gratis Cloudflare **direset pukul 08.00 WITA** (00.00 UTC). P
 
 | Kuota gratis per hari | Batas | Perkiraan terpakai |
 |---|---|---|
-| Permintaan Worker ("Requests today") | 100.000 | ±8.100 (1 per buka aplikasi; +1 tiap muat ulang/sambung ulang) |
-| Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±45.000 |
+| Permintaan Worker ("Requests today") | 100.000 | ±8.100–9.000 (1 per siswa per ujian; +1 bagi siswa yang koneksinya sempat putus; terburuk ±15.900) |
+| Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±17.000 |
 | Baris ditulis D1 | 100.000 | ±16.000 |
 | Baris dibaca D1 | 5.000.000 | jauh di bawah |
 | Waktu aktif Durable Object | 13.000 GB-detik | ±4.500 |
@@ -125,7 +129,7 @@ Cek di aplikasi guru → **Pengaturan** → bagian *Sistem & cadangan*: repo dan
 3. **Data guru**: buat akun guru. Hapus akun contoh `guru`.
 4. **Data siswa → Impor**: Excel dengan kolom **NIS, Nama, Kelas** (opsional **Kata sandi**; bawaan = NIS). Hapus siswa contoh 1001–1003.
 5. Guru membuat **Bank soal**; admin membuat **Jadwal ujian**.
-6. Hari ujian: pengawas membuka **Monitoring** (tanda **● Langsung** = tersambung), bacakan **token**.
+6. Hari ujian: pengawas membuka **Monitoring** (tanda **● Status diperbarui otomatis** = tersambung), bacakan **token**.
 
 ### Sudah punya data di versi Apps Script?
 Isi `DATA_REPO` dengan repo data lama (mis. `namaakun/cbt-data`) dan pastikan token punya akses ke repo itu,
@@ -136,16 +140,28 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ## Cara kerja saat ujian
 
-- Setiap jawaban **langsung tersimpan di perangkat** siswa (aman bila halaman dimuat ulang atau koneksi putus).
-- Perangkat mengirim jawaban ke server lewat koneksi langsung **tiap 60 detik bila ada perubahan**, dan seketika saat
-  siswa keluar halaman.
-- Aplikasi guru dan siswa memakai **satu koneksi langsung** untuk semua hal (login, daftar ujian, edit soal, jadwal,
-  monitor, jawaban, nilai). Satu kali membuka aplikasi = 1 permintaan kuota. Bila koneksi putus (sinyal hilang,
-  HP terkunci lama), menyambung ulang menambah 1 permintaan.
-- Bila koneksi langsung (WebSocket) diblokir jaringan, aplikasi otomatis memakai HTTP biasa (tiap klik = 1 permintaan;
-  jawaban dikirim tiap 3 menit).
-- Saat waktu habis, perangkat mengirim otomatis. Bila perangkat mati, server mengumpulkan sendiri dari jawaban
-  terakhir yang tersimpan (maks. ±2 menit setelah waktu habis).
+- **1 kali ujian = 1 permintaan per siswa.** Koneksi dibuka sekali (saat login/mulai) dan dipakai untuk login, daftar
+  ujian, mulai, cadangan jawaban, Selesai, dan nilai.
+- Setiap jawaban **langsung tersimpan di perangkat** siswa. Soal dan batas waktu juga disimpan di perangkat, sehingga
+  halaman yang dimuat ulang atau aplikasi yang ditutup-buka **melanjutkan ujian tanpa menghubungi server**.
+- Selama koneksi masih terbuka, cadangan jawaban ikut dikirim **tiap 5 menit** (tidak menambah permintaan).
+- Bila koneksi putus (sinyal hilang, HP terkunci lama), aplikasi **tidak menyambung ulang** selama ujian. Siswa tetap
+  mengerjakan; saat menekan **Selesai** (atau waktu habis) aplikasi membuka 1 koneksi baru untuk mengirim jawaban akhir.
+  Jadi paling banyak 2 permintaan per siswa per ujian.
+- Saat waktu habis, perangkat mengirim otomatis. Bila saat itu tidak ada internet, jawaban tetap di perangkat dan
+  dikirim sendiri begitu internet menyala (dicoba tiap 2 menit). Selama menunggu, monitor menampilkan **Pending**.
+- Jawaban yang datang setelah waktu habis tetap diterima dan diberi catatan *"terkirim … menit setelah waktu habis"*.
+- Bila perangkat rusak/hilang: pengawas memilih **Kumpulkan sekarang** (dinilai dari cadangan terakhir di server).
+  Bila tidak ada yang menekan, siswa *Pending* dinilai otomatis dari cadangan terakhir **2 jam setelah jadwal ditutup**;
+  bila perangkatnya tersambung lagi setelah itu, jawaban lengkap dari perangkat menggantikan nilai otomatis.
+- **Monitor** cukup menampilkan status: **Belum mulai · Mengerjakan · Pending · Selesai**. Tidak ada progres jawaban,
+  tidak ada penyegaran berkala. Perubahan status dikirim server lewat koneksi aplikasi guru yang sudah terbuka. Bila
+  koneksi guru putus, tekan **Perbarui** (1 permintaan).
+- Aplikasi guru: membuka aplikasi lalu mengedit soal sampai **Simpan**, mengatur jadwal, dan memantau = 1 permintaan.
+  Draf soal tersimpan di perangkat selama mengedit. Bila koneksi guru sempat putus (laptop tidur), Simpan membuka
+  1 koneksi baru.
+- Bila koneksi langsung (WebSocket) diblokir jaringan, aplikasi memakai HTTP biasa (tiap klik = 1 permintaan; jawaban
+  tetap dikirim saat Selesai saja).
 - Mulai, selesai, dan reset dicatat permanen **sebelum** siswa melihat tanda berhasil. Jawaban sementara dicadangkan
   tiap 2 menit, sehingga server yang restart di tengah ujian tidak menghilangkan jawaban.
 - Login siswa berlaku 16 jam, jadi siswa cukup login sekali untuk semua sesi ujian hari itu.
@@ -155,7 +171,7 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 ## Memperbarui aplikasi
 
 Ubah file, lalu jalankan `npx wrangler deploy` (atau klik dua kali `PASANG-WINDOWS.bat`).
-**Jangan deploy saat ujian berlangsung.** Bila terpaksa, siswa akan tersambung ulang otomatis tanpa kehilangan jawaban.
+**Jangan deploy saat ujian berlangsung.** Bila terpaksa, siswa tetap mengerjakan dari perangkat dan jawaban terkirim saat Selesai.
 
 ## Hosting di GitHub Pages (opsional)
 
@@ -169,8 +185,8 @@ const API_URL = window.CBT_API_URL || 'https://cbt-sekolah.<subdomain>.workers.d
 
 ```
 npm run dev          # server lokal http://localhost:8787 (data uji, tanpa akun Cloudflare)
-npm test             # 64 uji fungsional (jalankan saat "npm run dev" aktif)
-npm run beban        # simulasi 1300 siswa sekaligus
+npm test             # uji fungsional + uji koneksi tunggal (jalankan saat "npm run dev" aktif)
+GURU=50 MENIT=90 npm run beban   # simulasi ujian 90 menit: 1300 siswa + 50 guru
 ```
 
 ## Pemecahan masalah
@@ -178,7 +194,8 @@ npm run beban        # simulasi 1300 siswa sekaligus
 | Gejala | Penyebab & solusi |
 |---|---|
 | "Kuota harian Cloudflare sudah habis" / Error 1027 | Batas 100.000 permintaan/hari tercapai. Pulih pukul 08.00 WITA. Jawaban siswa tetap aman di perangkat. Pertimbangkan paket US$5/bulan bila sering terjadi. |
-| Monitor tertulis "Menyambung ulang…" terus | Jaringan memblokir WebSocket. Monitor tetap disegarkan tiap 60 detik. Coba jaringan lain / data seluler. |
+| Monitor tertulis "Koneksi terputus" | Tekan **Perbarui** (1 permintaan). Bila tetap gagal, jaringan memblokir WebSocket: coba jaringan lain / data seluler. |
+| Banyak siswa *Pending* setelah waktu habis | Perangkat siswa belum tersambung internet. Minta siswa menyalakan internet dan **jangan menghapus data browser**; jawaban terkirim sendiri. Perangkat rusak/hilang → **Kumpulkan sekarang**. |
 | Siswa: "Offline — jawaban aman di perangkat" | Koneksi putus. Biarkan siswa lanjut; jawaban terkirim saat koneksi kembali. |
 | "MEDIA_REPO belum diatur" saat unggah gambar | Lakukan Langkah 3. Guru tetap bisa memakai *Pakai URL gambar*. |
 | "GitHub 401 / Bad credentials" | Token salah/kedaluwarsa. Buat token baru → `npx wrangler secret put GITHUB_TOKEN`. |

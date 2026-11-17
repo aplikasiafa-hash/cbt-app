@@ -129,6 +129,13 @@ table.tbl{width:100%;border-collapse:collapse}
 .chip-merah{background:var(--merah-muda);color:var(--merah)}
 .chip-biru{background:var(--biru-muda);color:var(--biru)}
 .chip-garis{border-color:var(--garis);color:var(--teks-2)}
+.chip-oranye{background:#FFF0E0;color:#9A4A00;border-color:#F5C99A}
+.stat-status{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat-status button{border:1px solid var(--garis);background:#fff;border-radius:10px;padding:12px 14px;text-align:left;cursor:pointer;font:inherit;display:flex;flex-direction:column;gap:2px}
+.stat-status button b{font-size:26px;line-height:1.1}.stat-status button span{font-size:13px;color:var(--teks-2)}
+.stat-status button.on{outline:2px solid var(--teks);outline-offset:-2px}
+.stat-status .st-mengerjakan b{color:#7A5B00}.stat-status .st-pending b{color:#9A4A00}.stat-status .st-selesai b{color:var(--hijau)}
+@media (max-width:640px){.stat-status{grid-template-columns:repeat(2,1fr)}}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:#C5CAD0}
 .dot.on{background:#33A06F;box-shadow:0 0 0 3px rgba(51,160,111,.18)}
 .bar{height:6px;background:var(--garis-2);border-radius:3px;overflow:hidden;min-width:80px}
@@ -821,11 +828,16 @@ table.tbl{width:100%;border-collapse:collapse}
           <div class="token-box" v-if="d.ujian.pakaiToken"><div><div class="small muted">Token ujian</div><b>{{ d.ujian.token }}</b></div><button class="btn btn-sm" @click="gantiToken">Ganti token</button></div>
         </div>
         <div class="panel panel-pad" style="margin-bottom:16px">
-          <p class="lede">Dari <b>{{ d.peserta.length }}</b> peserta: <b>{{ hit.belum }}</b> belum mulai, <b>{{ hit.mengerjakan }}</b> sedang mengerjakan, <b>{{ hit.selesai }}</b> selesai.<template v-if="hit.melanggar"> <b>{{ hit.melanggar }}</b> siswa pernah keluar dari halaman ujian.</template></p>
+          <div class="stat-status">
+            <button v-for="k in ['belum','mengerjakan','pending','selesai']" :key="k" :class="['st-'+k, {on: fStatus===k}]" @click="fStatus = fStatus===k ? '' : k">
+              <b class="tnum">{{ hit[k] }}</b><span>{{ LABEL_STATUS[k] }}</span>
+            </button>
+          </div>
+          <p class="small muted" style="margin-top:10px"><b>Pending</b> = waktu sudah habis tetapi jawaban dari perangkat siswa belum diterima (perangkat mengirim sendiri begitu tersambung internet). Bila perangkat rusak/hilang, pilih <i>Kumpulkan sekarang</i> pada siswa tersebut.</p>
           <div class="row" style="margin-top:10px">
-            <span class="chip" :class="langsung ? 'chip-hijau' : 'chip-abu'">{{ langsung ? '● Langsung' : 'Menyambung ulang…' }}</span>
+            <span class="chip" :class="langsung ? 'chip-hijau' : 'chip-abu'">{{ langsung ? '● Status diperbarui otomatis' : (terputus ? 'Koneksi terputus' : 'Menyambung…') }}</span>
             <span class="small muted">Diperbarui {{ fmtJamDetik(diperbarui) }}</span>
-            <button class="btn btn-sm" @click="muat()" v-if="!langsung">Segarkan</button>
+            <button class="btn btn-sm" @click="sambungLagi" v-if="!langsung">Perbarui</button>
             <a class="btn btn-sm" :href="'#/hasil/'+d.ujian.id">Lihat hasil</a>
           </div>
         </div>
@@ -833,18 +845,16 @@ table.tbl{width:100%;border-collapse:collapse}
           <div class="toolbar">
             <input class="input search" v-model="q" placeholder="Cari nama atau NIS…" type="search">
             <select class="input" v-model="fKelas"><option value="">Semua kelas</option><option v-for="k in d.ujian.kelas" :key="k">{{ k }}</option></select>
-            <select class="input" v-model="fStatus"><option value="">Semua status</option><option value="belum">Belum mulai</option><option value="mengerjakan">Mengerjakan</option><option value="selesai">Selesai</option><option value="direset">Direset</option></select>
+            <select class="input" v-model="fStatus"><option value="">Semua status</option><option value="belum">Belum mulai</option><option value="mengerjakan">Mengerjakan</option><option value="pending">Pending</option><option value="selesai">Selesai</option></select>
           </div>
           <div class="tbl-wrap"><table class="tbl">
-            <thead><tr><th></th><th>NIS</th><th>Nama</th><th>Kelas</th><th>Status</th><th>Progres</th><th class="num">Keluar</th><th>Waktu</th><th></th></tr></thead>
+            <thead><tr><th>NIS</th><th>Nama</th><th>Kelas</th><th>Status</th><th>Waktu</th><th></th></tr></thead>
             <tbody><tr v-for="p in tampil" :key="p.nis">
-              <td><span class="dot" :class="{on: online(p)}" :title="online(p)?'Aktif':'Tidak aktif'"></span></td>
               <td class="tnum">{{ p.nis }}</td><td><b>{{ p.nama }}</b><div class="small muted" v-if="p.catatan">{{ p.catatan }}</div></td><td>{{ p.kelas }}</td>
               <td><status-peserta :s="p.status"></status-peserta></td>
-              <td style="min-width:140px"><template v-if="p.status!=='belum'"><div class="bar"><i :style="{width: (p.terjawab/(d.ujian.jumlahSoal||1)*100)+'%'}"></i></div><span class="small muted tnum">{{ p.terjawab }}/{{ d.ujian.jumlahSoal }}<template v-if="p.ragu"> · {{ p.ragu }} ragu</template></span></template></td>
-              <td class="num"><span :class="{'no-mark': p.pelanggaran}">{{ p.pelanggaran || '' }}</span></td>
               <td class="small tnum">
-                <template v-if="p.status==='mengerjakan'">mulai {{ fmtJam(p.mulai) }}<br><b>sisa {{ sisa(p) }}</b></template>
+                <template v-if="p.status==='mengerjakan'">mulai {{ fmtJam(p.mulai) }} · batas {{ fmtJam(p.deadline) }}</template>
+                <template v-else-if="p.status==='pending'">waktu habis {{ fmtJam(p.deadline) }}</template>
                 <template v-else-if="p.status==='selesai'">{{ fmtJam(p.selesai) }}<span v-if="p.nilai!==null"> · nilai <b>{{ p.nilai }}</b></span></template>
               </td>
               <td class="act">
@@ -1557,7 +1567,7 @@ app.component('status-jadwal', {
 });
 app.component('status-peserta', {
   props: ['s'],
-  template: `<span class="chip" :class="{belum:'chip-garis',mengerjakan:'chip-kuning',selesai:'chip-hijau',direset:'chip-merah'}[s]">{{ {belum:'Belum mulai',mengerjakan:'Mengerjakan',selesai:'Selesai',direset:'Direset'}[s] || s }}</span>`
+  template: `<span class="chip" :class="{belum:'chip-garis',mengerjakan:'chip-kuning',pending:'chip-oranye',selesai:'chip-hijau',direset:'chip-merah'}[s]">{{ {belum:'Belum mulai',mengerjakan:'Mengerjakan',pending:'Pending',selesai:'Selesai',direset:'Direset'}[s] || s }}</span>`
 });
 app.component('menu-pop', {
   props: ['items'], template: '#t-menu-pop', data: () => ({ buka: false }),
@@ -1843,68 +1853,63 @@ app.component('pilih-ujian', {
   }
 });
 
+const LABEL_STATUS = { belum: 'Belum mulai', mengerjakan: 'Mengerjakan', pending: 'Pending', selesai: 'Selesai' };
+// Monitor HEMAT: cukup status tiap siswa (belum mulai / mengerjakan / pending / selesai). Tidak menarik progres jawaban.
+// Memakai koneksi aplikasi yang sudah terbuka; perubahan status dikirim server lewat koneksi itu (tanpa request baru).
+// Tidak ada penyegaran berkala & tidak menyambung ulang otomatis: bila koneksi putus, tekan "Perbarui" (1 request).
 app.component('v-monitor', {
   template: '#t-monitor',
-  data: () => ({ d: null, q: '', fKelas: '', fStatus: '', diperbarui: 0, detik: 0, langsung: false }),
+  data: () => ({ d: null, q: '', fKelas: '', fStatus: '', diperbarui: 0, langsung: false, terputus: false, LABEL_STATUS }),
   computed: {
-    hit() { const h = { belum: 0, mengerjakan: 0, selesai: 0, direset: 0, melanggar: 0 }; this.d.peserta.forEach(p => { h[p.status] = (h[p.status] || 0) + 1; if (p.pelanggaran) h.melanggar++; }); h.belum += h.direset; return h; },
+    hit() { const h = { belum: 0, mengerjakan: 0, pending: 0, selesai: 0 }; this.d.peserta.forEach(p => { const k = p.status === 'direset' ? 'belum' : p.status; h[k] = (h[k] || 0) + 1; }); return h; },
     tampil() {
-      const q = this.q.toLowerCase(), u = { mengerjakan: 0, belum: 1, direset: 1, selesai: 2 };
-      return this.d.peserta.filter(p => (!q || p.nama.toLowerCase().includes(q) || p.nis.includes(q)) && (!this.fKelas || p.kelas === this.fKelas) && (!this.fStatus || p.status === this.fStatus))
+      const q = this.q.toLowerCase(), u = { pending: 0, mengerjakan: 1, belum: 2, direset: 2, selesai: 3 };
+      const cocok = p => !this.fStatus || p.status === this.fStatus || (this.fStatus === 'belum' && p.status === 'direset');
+      return this.d.peserta.filter(p => (!q || p.nama.toLowerCase().includes(q) || p.nis.includes(q)) && (!this.fKelas || p.kelas === this.fKelas) && cocok(p))
         .sort((a, b) => (u[a.status] - u[b.status]) || a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
     }
   },
   mounted() {
     if (!S.route.id) return;
-    this.gagal = 0; this.mati = false;
+    this.mati = false;
     this.dengar = m => this.pesan(m);
     Sok.pendengar.add(this.dengar);
     this.sambung();
-    // cadangan bila koneksi langsung (WebSocket) tidak tersedia: segarkan tiap 60 detik
-    this.t = setInterval(() => { this.detik++; if (!this.langsung && this.detik % 60 === 0 && !document.hidden) this.muat(true); }, 1000);
-    this.onVis = () => { if (!document.hidden && !this.langsung && !this.mati) this.sambung(); };
-    document.addEventListener('visibilitychange', this.onVis);
   },
-  unmounted() { clearInterval(this.t); document.removeEventListener('visibilitychange', this.onVis); this.putus(); },
+  unmounted() { this.putus(); },
   methods: {
     async muat(diam) { try { this.d = await api('monitorUjian', { ujianId: S.route.id }, { retry: diam ? 1 : 3 }); this.diperbarui = Date.now(); } catch (e) { if (!diam) toast(e.message, 'err'); } },
     sambung() {
-      clearTimeout(this.tWs);
       if (!WS_URL || this.mati) { if (!this.d) this.muat(); return; }
-      // memakai koneksi tunggal aplikasi (tidak menambah request bila sudah terbuka)
       Sok.buka().then(() => { if (!this.mati) Sok.kirim({ t: 'pantau', tok: S.token, m: S.route.id }); })
-        .catch(() => { if (!this.d) this.muat(true); this.gagal++; this.jadwal(); });
+        .catch(() => { this.terputus = true; if (!this.d) this.muat(true); });
     },
-    jadwal() {
-      clearTimeout(this.tWs);
-      // tiap sambung ulang = 1 request: setelah 6 kali gagal, coba lagi tiap 5 menit (monitor tetap disegarkan tiap 60 detik)
-      const jeda = this.gagal >= 6 ? 300000 : Math.min(30000, 1000 * 2 ** Math.min(this.gagal, 5)) * (0.5 + Math.random());
-      if (!document.hidden) this.tWs = setTimeout(() => this.sambung(), jeda);
-    },
+    sambungLagi() { this.terputus = false; if (WS_URL && Sok.tersedia()) this.sambung(); else this.muat(); },
     pesan(m) {
       if (this.mati) return;
-      if (m.t === 'snap') { this.d = m.data; this.langsung = true; this.gagal = 0; this.diperbarui = Date.now(); }
+      if (m.t === 'snap') { this.d = m.data; this.langsung = true; this.terputus = false; this.diperbarui = Date.now(); }
       else if (m.t === 'diff' && this.d) {
         const idx = new Map(this.d.peserta.map((p, i) => [p.nis, i]));
         m.rows.forEach(r => { const i = idx.get(r.nis); if (i === undefined) this.d.peserta.push(r); else this.d.peserta.splice(i, 1, r); });
         this.diperbarui = Date.now();
-      } else if (m.t === 'tik') this.diperbarui = this.diperbarui || Date.now();
+      } else if (m.t === 'tik') {
+        // waktu berjalan: siswa yang batas waktunya lewat tampil Pending tanpa bertanya ke server
+        if (this.d) { const t = sekarang(); this.d.peserta.forEach(p => { if (p.status === 'mengerjakan' && p.deadline && p.deadline + 120000 < t) p.status = 'pending'; }); }
+      }
       else if (m.t === 'err' && m.k === 'pantau') { this.mati = true; this.langsung = false; if (m.code === 'AUTH') keluar(true); else toast(m.msg, 'err'); }
-      else if (m.t === '_tutup') { this.langsung = false; if (!this.d) this.muat(true); this.gagal++; this.jadwal(); }
+      else if (m.t === '_tutup') { this.langsung = false; this.terputus = true; }
     },
     putus() {
-      this.mati = true; clearTimeout(this.tWs);
+      this.mati = true;
       Sok.pendengar.delete(this.dengar);
       if (this.langsung) Sok.kirim({ t: 'lepas' });
       this.langsung = false;
     },
-    online(p) { return p.status === 'mengerjakan' && (p.online || sekarang() - p.lastSeen < 240000); },
-    sisa(p) { this.detik; const s = Math.max(0, Math.floor((p.deadline - sekarang()) / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
     aksi(p) {
-      const a = [];
-      if (p.adaPerangkat && p.status === 'mengerjakan') a.push({ t: 'Reset login (pindah perangkat)', f: () => this.jalankan('resetLogin', p, 'Reset login ' + p.nama + '?', 'Siswa bisa melanjutkan di perangkat lain. Jawaban tetap tersimpan.') });
-      if (p.status === 'mengerjakan') a.push({ t: 'Hentikan dan kumpulkan', f: () => this.jalankan('paksaSelesai', p, 'Kumpulkan jawaban ' + p.nama + '?', 'Ujian siswa dihentikan sekarang dan dinilai dari jawaban terakhir yang tersimpan.'), danger: true });
-      if (S.user.role === 'admin' && (p.status === 'selesai' || p.status === 'mengerjakan')) a.push({ t: 'Ulang ujian dari awal', f: () => this.jalankan('resetPeserta', p, 'Ulang ujian ' + p.nama + '?', 'Semua jawaban dan nilai siswa ini dihapus. Siswa bisa mengerjakan lagi dari awal.'), danger: true });
+      const a = [], aktif = p.status === 'mengerjakan' || p.status === 'pending';
+      if (p.adaPerangkat && aktif) a.push({ t: 'Reset login (pindah perangkat)', f: () => this.jalankan('resetLogin', p, 'Reset login ' + p.nama + '?', 'Siswa bisa melanjutkan di perangkat lain. Jawaban yang belum terkirim dari perangkat lama tidak ikut pindah.') });
+      if (aktif) a.push({ t: p.status === 'pending' ? 'Kumpulkan sekarang' : 'Hentikan dan kumpulkan', f: () => this.jalankan('paksaSelesai', p, 'Kumpulkan jawaban ' + p.nama + '?', 'Ujian siswa dihentikan sekarang dan dinilai dari cadangan jawaban terakhir yang sempat diterima server. Jawaban di perangkat siswa yang belum terkirim tidak ikut dinilai.'), danger: true });
+      if (S.user.role === 'admin' && (p.status === 'selesai' || aktif)) a.push({ t: 'Ulang ujian dari awal', f: () => this.jalankan('resetPeserta', p, 'Ulang ujian ' + p.nama + '?', 'Semua jawaban dan nilai siswa ini dihapus. Siswa bisa mengerjakan lagi dari awal.'), danger: true });
       return a;
     },
     async jalankan(aksi, p, judul, teks) {

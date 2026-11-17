@@ -4,8 +4,11 @@ const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 const WSB = BASE.replace(/^http/, 'ws');
 const N = Number(process.env.N || 1300);
 const GURU = Number(process.env.GURU || 3);              // guru yang memantau (masing-masing 1 koneksi)
-const MENIT = Number(process.env.MENIT || 0);            // >0: simulasi ujian MENIT menit, autosave tiap menit (jam server dimajukan)
-const AUTOSAVE = MENIT > 0 ? MENIT - 1 : Number(process.env.AUTOSAVE || 6);
+const MENIT = Number(process.env.MENIT || 0);            // >0: simulasi ujian MENIT menit (jam server dimajukan)
+const CADANGAN_MENIT = 5;                                // cadangan jawaban tiap 5 menit, hanya lewat koneksi yang masih terbuka
+const AUTOSAVE = MENIT > 0 ? Math.floor((MENIT - 1) / CADANGAN_MENIT) : Number(process.env.AUTOSAVE || 6);
+const PUTUS = Number(process.env.PUTUS ?? 0.1);          // bagian siswa yang koneksinya putus di tengah ujian (tidak disambung ulang)
+const OFFLINE = Number(process.env.OFFLINE ?? 0.02);     // bagian siswa yang offline saat waktu habis → Pending → kirim belakangan
 const hit = { koneksi: 0, pesan: 0, http: 0 };
 const per = { siswa: { koneksi: 0, pesan: 0 }, guru: { koneksi: 0, pesan: 0 } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -84,54 +87,90 @@ await pool(sis, N, async s => {
   s.tok = l.data.token;
   const d = await s.ws.rpc('ujianSaya', {}, s.tok); if (!d.ok || !d.data.length) { s.err = d; return; }
   const m = await s.ws.rpc('mulaiUjian', { ujianId: s.u.id, token: s.u.token, perangkat: s.dev }, s.tok); if (!m.ok) { s.err = m; return; }
-  s.soal = m.data.soal; s.deadline = m.data.deadline;
+  s.soal = m.data.soal; s.deadline = m.data.deadline; s.mulai = m.data.mulai;
   s.ws.kirimJ({ t: 'ikut', tok: s.tok, u: s.u.id, p: s.dev });
   s.hai = await s.ws.tunggu(x => x.t === 'hai' || x.t === 'err');
   lat.push(Date.now() - a);
 });
 ok(`${sis.filter(s => s.hai && s.hai.t === 'hai').length}/${N} siswa siap mengerjakan dalam ${Date.now() - t} ms (${waktu(lat)})`, sis.every(s => s.hai && s.hai.t === 'hai'), (sis.find(s => s.err) || {}).err);
 
-console.log(MENIT ? `\nFase 2 — ujian ${MENIT} menit: tiap menit jam server dimajukan 1 menit & semua siswa autosave (${AUTOSAVE}×)` : `\nFase 2 — ${AUTOSAVE}× autosave per siswa di koneksi yang sama`);
+const langkahP = PUTUS > 0 ? Math.round(1 / PUTUS) : 0, langkahO = OFFLINE > 0 ? Math.round(1 / OFFLINE) : 0;
+sis.forEach((s, i) => { s.peran = langkahO && i % langkahO === 1 ? 'offline' : langkahP && i % langkahP === 0 ? 'putus' : 'normal'; });
+const jawabAcak = (s, frac) => { const j = {}; s.soal.slice(0, Math.max(1, Math.round(frac * s.soal.length))).forEach(q => { if (q.opsi) j[q.id] = q.opsi[Math.floor(Math.random() * q.opsi.length)].id; else if (q.tipe === 'isian' || q.tipe === 'uraian') j[q.id] = 'jawaban ' + s.nis; }); return j; };
+const menit = k => (k + 1) * CADANGAN_MENIT;
+console.log(`\nFase 2 — ujian ${MENIT || '?'} menit: cadangan jawaban tiap ${CADANGAN_MENIT} menit lewat koneksi yang masih terbuka (${AUTOSAVE}×);`
+  + ` ${sis.filter(s => s.peran === 'putus').length} siswa koneksinya putus di menit ke-30, ${sis.filter(s => s.peran === 'offline').length} siswa offline saat waktu habis`);
 lat = []; t = Date.now();
+while (await mons[0].tunggu(x => x.t === 'diff', 4500)) {}   // habiskan perubahan status "mulai"
+let kirimCad = 0;
 for (let k = 0; k < AUTOSAVE; k++) {
-  if (MENIT) await adm.rpc('_dev', { offset: (k + 1) * 60000 });
+  if (MENIT) await adm.rpc('_dev', { offset: menit(k) * 60000 });
+  if (menit(k) >= 30) sis.forEach(s => { if (s.peran === 'putus' && s.ws.readyState === 1) s.ws.close(); });
   await Promise.all(sis.map(async s => {
-    const j = {}; s.soal.slice(0, Math.round((k + 1) / AUTOSAVE * s.soal.length)).forEach(q => { if (q.opsi) j[q.id] = q.opsi[Math.floor(Math.random() * q.opsi.length)].id; else if (q.tipe === 'isian' || q.tipe === 'uraian') j[q.id] = 'jawaban ' + s.nis; });
-    s.j = j; const a = Date.now();
-    s.ws.kirimJ({ t: 'j', j: { j, r: [] }, p: 0, v: k + 1 });
+    s.j = jawabAcak(s, (k + 1) / (AUTOSAVE + 1));   // jawaban di perangkat terus bertambah walau koneksi putus
+    if (s.ws.readyState !== 1) return;            // koneksi putus → tidak disambung ulang, jawaban tetap di perangkat
+    const a = Date.now(); kirimCad++;
+    s.ws.kirimJ({ t: 'j', j: { j: s.j, r: [] }, p: 0, v: k + 1, mulai: s.mulai });
     if (await s.ws.tunggu(m => m.t === 'ok' && m.v === k + 1)) lat.push(Date.now() - a);
   }));
 }
-ok(`${lat.length}/${N * AUTOSAVE} autosave diterima server dalam ${Date.now() - t} ms (${waktu(lat)})`, lat.length === N * AUTOSAVE);
-await sleep(4000);
+sis.forEach(s => { s.j = jawabAcak(s, 1); });
+ok(`${lat.length}/${kirimCad} cadangan jawaban diterima server dalam ${Date.now() - t} ms (${waktu(lat)})`, lat.length === kirimCad);
+await sleep(5000);
 let diffRows = 0; for (;;) { const m = await mons[0].tunggu(x => x.t === 'diff', 500); if (!m) break; diffRows += m.rows.length; }
-ok(`monitor guru menerima progres langsung (${diffRows} baris)`, diffRows > 0);
+ok(`monitor guru tidak menerima data jawaban/progres selama ujian (${diffRows} baris)`, diffRows === 0);
+const putusKon = sis.filter(s => s.peran === 'putus').length;
+ok(`${putusKon} siswa yang koneksinya putus tidak menyambung ulang`, sis.filter(s => s.peran === 'putus').every(s => s.ws.readyState !== 1));
 if (MENIT) { await adm.rpc('_dev', { offset: (MENIT - 0.5) * 60000 }); console.log(`  (jam server sekarang menit ke-${MENIT - 0.5} dari ${MENIT})`); }
 
-console.log(`\nFase 3 — ${N} siswa menekan "Selesai" BERSAMAAN, lalu melihat nilai`);
+console.log(`\nFase 3 — siswa menekan "Selesai" BERSAMAAN (yang koneksinya putus membuka 1 koneksi baru), lalu melihat nilai`);
+async function kirimAkhir(s) {
+  if (s.ws.readyState === 1) {
+    s.ws.kirimJ({ t: 'selesai', id: 'f' + s.nis, j: { j: s.j, r: [] }, p: 0, a: '', mulai: s.mulai });
+    const h = await s.ws.tunggu(m => m.t === 'hasil' || m.t === 'selesai' || m.t === 'err');
+    return h && (h.t === 'hasil' || h.t === 'selesai') ? h.data : h;
+  }
+  s.ws = soket('siswa'); await s.ws.terbuka;      // 1 koneksi baru, hanya untuk mengirim jawaban akhir
+  const r = await s.ws.rpc('selesaiUjian', { ujianId: s.u.id, jawaban: { j: s.j, r: [] }, pelanggaran: 0, perangkat: s.dev, mulai: s.mulai }, s.tok);
+  return r.ok ? r.data : r;
+}
+const kirimSekarang = sis.filter(s => s.peran !== 'offline');
 lat = []; t = Date.now();
-const res = await Promise.all(sis.map(async s => {
-  const a = Date.now(); s.ws.kirimJ({ t: 'selesai', id: 'f' + s.nis, j: { j: s.j, r: [] }, p: 0, a: '' });
-  const h = await s.ws.tunggu(m => m.t === 'hasil' || m.t === 'selesai' || m.t === 'err');
-  lat.push(Date.now() - a); return h && (h.t === 'hasil' || h.t === 'selesai') ? h.data : h;
-}));
-ok(`${res.filter(x => x && x.status === 'selesai').length}/${N} selesai & dinilai dalam ${Date.now() - t} ms (${waktu(lat)})`, res.every(x => x && x.status === 'selesai'), res.find(x => !x || x.status !== 'selesai'));
-const lihat = await Promise.all(sis.slice(0, 50).map(s => s.ws.rpc('ujianSaya', {}, s.tok)));
+const res = await Promise.all(kirimSekarang.map(async s => { const a = Date.now(); const h = await kirimAkhir(s); lat.push(Date.now() - a); return h; }));
+ok(`${res.filter(x => x && x.status === 'selesai').length}/${kirimSekarang.length} selesai & dinilai dalam ${Date.now() - t} ms (${waktu(lat)})`, res.every(x => x && x.status === 'selesai'), res.find(x => !x || x.status !== 'selesai'));
+const lihat = await Promise.all(sis.filter(s => s.peran === 'normal').slice(0, 50).map(s => s.ws.rpc('ujianSaya', {}, s.tok)));
 ok('siswa melihat nilai di daftar ujian lewat koneksi yang sama', lihat.every(x => x.ok && x.data.some(u => u.status === 'selesai')), lihat.find(x => !x.ok));
+
+const sisOff = sis.filter(s => s.peran === 'offline');
+if (sisOff.length) {
+  console.log(`\nFase 4 — ${sisOff.length} siswa offline saat waktu habis`);
+  sisOff.forEach(s => s.ws.close());
+  await adm.rpc('_dev', { offset: (MENIT + 3) * 60000, rawat: true });
+  await sleep(5000);
+  const mo = await adm.rpc('monitorUjian', { ujianId: ujian.X.id }, A);
+  const hit = {}; mo.data.peserta.forEach(p => { hit[p.status] = (hit[p.status] || 0) + 1; });
+  ok(`monitor PAS X: ${JSON.stringify(hit)} — siswa offline tampil Pending`, (hit.pending || 0) === sisOff.filter(s => s.u.id === ujian.X.id).length, hit);
+  const rp = await Promise.all(sisOff.map(kirimAkhir));
+  ok(`${rp.filter(x => x && x.status === 'selesai').length}/${sisOff.length} jawaban siswa offline diterima saat internet kembali (ditandai terlambat)`, rp.every(x => x && x.status === 'selesai' && /setelah waktu habis/.test(x.catatan)), rp.find(x => !x || x.status !== 'selesai'));
+}
 await sleep(4000);
-let total = 0;
-for (const u of Object.values(ujian)) { const h = await adm.rpc('hasilUjian', { ujianId: u.id }, A); total += h.data.peserta.filter(p => p.status === 'selesai' && p.hasil).length; }
+let total = 0, cocokJawab = 0;
+for (const u of Object.values(ujian)) {
+  const h = await adm.rpc('hasilUjian', { ujianId: u.id }, A);
+  h.data.peserta.forEach(p => { if (p.status === 'selesai' && p.hasil) { total++; const s = sis.find(x => x.nis === p.nis); if (s && Object.keys(p.jawaban.j).length === Object.keys(s.j).length) cocokJawab++; } });
+}
 ok(`D1: ${total}/${N} hasil tersimpan permanen`, total === N);
+ok(`${cocokJawab}/${N} hasil memakai jawaban LENGKAP dari perangkat (termasuk yang koneksinya putus)`, cocokJawab === N);
 sis.forEach(s => s.ws.close()); mons.forEach(m => m.close()); adm.close();
 
 // ---------------- kuota (hanya siswa & guru pemantau; persiapan admin tidak dihitung)
 const kon = per.siswa.koneksi + per.guru.koneksi, pes = per.siswa.pesan + per.guru.pesan;
 console.log(`\nPemakaian kuota: ${N} siswa × 1 ujian${MENIT ? ' ' + MENIT + ' menit' : ''} + ${GURU} guru memantau`);
-console.log(`  Worker requests ("Requests today") : ${kon}  (siswa ${per.siswa.koneksi} + guru ${per.guru.koneksi}) · HTTP: ${hit.http}`);
+console.log(`  Worker requests ("Requests today") : ${kon}  (siswa ${per.siswa.koneksi} = ${N} + ${per.siswa.koneksi - N} kirim akhir setelah koneksi putus/offline; guru ${per.guru.koneksi}) · HTTP: ${hit.http}`);
 console.log(`  Durable Object : ${kon} koneksi + ${pes} pesan masuk ÷ 20 = ${Math.round(kon + pes / 20)}  (pesan siswa ${per.siswa.pesan}, guru ${per.guru.pesan})`);
 const doUjian = kon + pes / 20;
 console.log(`\nProyeksi 1 hari = 6 ujian seperti ini:`);
-console.log(`  Worker  : ${(6 * kon).toLocaleString('id')} / 100.000  (+1 tiap siswa yang sambung ulang / muat ulang halaman)`);
+console.log(`  Worker  : ${(6 * kon).toLocaleString('id')} / 100.000  (tanpa koneksi putus: ${(6 * (N + GURU)).toLocaleString('id')}; terburuk, semua siswa putus: ${(6 * (2 * N + GURU)).toLocaleString('id')})`);
 console.log(`  DO      : ±${Math.round(6 * doUjian).toLocaleString('id')} / 100.000`);
 console.log(`  D1 tulis: ±${Math.round(2 * 6 * N).toLocaleString('id')} baris / 100.000`);
 console.log(fails ? `\n${fails} GAGAL` : '\nSEMUA LULUS');

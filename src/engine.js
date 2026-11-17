@@ -20,7 +20,8 @@ const { AppError, now, str_, num_, bool_, parse_, uid_, GRACE_MS } = X;
 
 const NB = 12;                 // ember cadangan jawaban per ujian
 const JW_FLUSH_MS = 120000;    // cadangkan jawaban sementara tiap 2 menit
-const DENYUT_MS = 4000;        // dorong perubahan ke monitor tiap 4 detik
+const DENYUT_MS = 4000;        // dorong perubahan status ke monitor tiap 4 detik
+const PENDING_MS = 2 * 3600000; // jawaban perangkat tak kunjung datang: dinilai dari cadangan server 2 jam setelah jadwal ditutup
 const ALARM_MS = 60000;        // perawatan saat tidak ada koneksi
 const BACKUP_MS = 30 * 60000;  // cadangan GitHub otomatis maks. tiap 30 menit
 const PUBLIK = new Set(['_dev', 'ping', 'loginSiswa', 'loginGuru']);
@@ -44,8 +45,12 @@ function rekam(P) {
   return {
     nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status, mulai: P.mulai || 0, deadline: P.deadline || 0, selesai: P.selesai || 0,
     pelanggaran: P.pelanggaran || 0, jawaban: P.jawaban || { j: {}, r: [] }, hasil: P.hasil || null, manual: { ...(P.manual || {}) },
-    catatan: P.catatan || '', percobaan: P.percobaan || 0, ver: P.ver || 0
+    catatan: P.catatan || '', percobaan: P.percobaan || 0, ver: P.ver || 0, otomatis: P.otomatis ? 1 : 0
   };
+}
+/** Status untuk guru: belum · mengerjakan · pending (waktu habis, jawaban perangkat belum diterima) · selesai · direset */
+function statusTampil(P, t) {
+  return P.status === 'mengerjakan' && (P.deadline || 0) + GRACE_MS < t ? 'pending' : P.status;
 }
 function dariRekam(rec) {
   const jw = rec.jawaban || { j: {}, r: [] };
@@ -314,9 +319,12 @@ export class Engine extends DurableObject {
     for (const L of [...this.L.values()]) {
       const u = this.ujian.get(L.id);
       for (const P of L.P.values()) {
-        if (P.status === 'mengerjakan' && (P.deadline || 0) + GRACE_MS < t) {
-          const bank = u && await this.getBank(u.bankId);
-          if (bank) this.finalisasi(L, P, u, bank, 'otomatis (waktu habis)');
+        if (P.status !== 'mengerjakan' || (P.deadline || 0) + GRACE_MS >= t) continue;
+        // waktu habis tetapi jawaban dari perangkat belum datang → Pending (perangkat mengirim saat tersambung lagi)
+        if (!P.tandaPending) { P.tandaPending = 1; this.ubah(L, P); }
+        if (u && t > Math.max(P.deadline, u.selesai) + PENDING_MS) {
+          const bank = await this.getBank(u.bankId);
+          if (bank) this.finalisasi(L, P, u, bank, 'otomatis: jawaban perangkat belum terkirim, dinilai dari cadangan terakhir', true);
         }
       }
     }
@@ -336,9 +344,9 @@ export class Engine extends DurableObject {
     }
   }
 
-  finalisasi(L, P, u, bank, catatan) {
+  finalisasi(L, P, u, bank, catatan, otomatis) {
     const t = now();
-    P.status = 'selesai'; P.selesai = t;
+    P.status = 'selesai'; P.selesai = t; P.otomatis = otomatis ? 1 : 0; P.tandaPending = 0;
     P.hasil = X.hitungHasil_(bank, P.jawaban, P.manual);
     P.catatan = catatan || P.catatan || '';
     P.ver = t; P.lastSeen = t;
@@ -422,13 +430,13 @@ export class Engine extends DurableObject {
     const u = this.ujian.get(L.id);
     if (P.status === 'selesai') return this.infoSelesai(P, u);
     if (P.status !== 'mengerjakan') return { status: P.status };
+    if (d.mulai && Number(d.mulai) !== P.mulai) return { status: 'direset' };
     this.cekPerangkat(P, str_(d.perangkat, 60));
     const t = now();
     const jw = X.bersihJawaban_(d.jawaban);
     P.jawaban = jw; P.jt = t;
     P.pelanggaran = Math.max(P.pelanggaran || 0, Math.round(num_(d.pelanggaran, 0)));
     P.terjawab = X.hitungTerjawab_(jw); P.ragu = (jw.r || []).length; P.lastSeen = t;
-    this.ubah(L, P);
     if (t > P.deadline + GRACE_MS) {
       return null; // pemanggil akan memfinalisasi (butuh bank)
     }
@@ -440,21 +448,25 @@ export class Engine extends DurableObject {
     const P = L.P.get(me.id);
     if (!P) throw new AppError('Data peserta tidak ditemukan');
     const u = this.ujianWajib(L.id);
-    if (P.status === 'mengerjakan') {
+    const mulai = Number(d.mulai) || 0;
+    if (mulai && P.mulai !== mulai && P.status !== 'selesai') throw new AppError('Ujian Anda telah direset oleh pengawas. Silakan mulai lagi.', 'DIRESET');
+    // dinilai otomatis karena perangkat lama tidak tersambung → jawaban perangkat yang datang belakangan tetap dipakai
+    const susulan = () => P.status === 'selesai' && P.otomatis && mulai && P.mulai === mulai;
+    if (P.status === 'mengerjakan' || susulan()) {
       this.cekPerangkat(P, str_(d.perangkat, 60));
       const bank = await this.getBank(u.bankId);
       if (!bank) throw new AppError('Bank soal ujian tidak ditemukan. Hubungi admin.');
-      if (P.status !== 'mengerjakan') return this.infoSelesai(P, u);
+      if (P.status !== 'mengerjakan' && !susulan()) return this.infoSelesai(P, u);
       const t = now();
       P.jawaban = X.bersihJawaban_(d.jawaban);
       P.pelanggaran = Math.max(P.pelanggaran || 0, Math.round(num_(d.pelanggaran, 0)));
       P.terjawab = X.hitungTerjawab_(P.jawaban); P.ragu = (P.jawaban.r || []).length;
       const cat = [];
       if (d.alasan) cat.push(str_(d.alasan, 60));
-      if (t > P.deadline + GRACE_MS) cat.push('terlambat');
+      if (t > P.deadline + GRACE_MS) cat.push('terkirim ' + Math.max(1, Math.round((t - P.deadline) / 60000)) + ' menit setelah waktu habis');
       return this.finalisasi(L, P, u, bank, cat.join(', '));
     }
-    if (P.status !== 'selesai') throw new AppError('Ujian belum dimulai atau telah direset');
+    if (P.status !== 'selesai') throw new AppError('Ujian Anda telah direset oleh pengawas. Silakan mulai lagi.', 'DIRESET');
     return this.infoSelesai(P, u);
   }
 
@@ -498,12 +510,7 @@ export class Engine extends DurableObject {
     const u = this.ujianWajib(uId);
     const L = await this.getL(u.id);
     if (!this.sockets.has(ws)) return;
-    let P = L.P.get(me.id);
-    if (P && P.status === 'mengerjakan' && P.deadline + GRACE_MS < now()) {
-      const bank = await this.getBank(u.bankId);
-      if (bank) this.finalisasi(L, P, u, bank, 'waktu habis');
-    }
-    P = L.P.get(me.id);
+    const P = L.P.get(me.id);
     if (!P || P.status !== 'mengerjakan') {
       kirim(ws, P && P.status === 'selesai' ? { t: 'selesai', data: this.infoSelesai(P, u) } : { t: 'status', status: P ? P.status : 'belum' });
       if (!ws.info.rpc) try { ws.close(1000, 'bukan sesi aktif'); } catch (e) {}
@@ -517,7 +524,7 @@ export class Engine extends DurableObject {
     let set = L.socks.get(me.id);
     if (!set) L.socks.set(me.id, set = new Set());
     set.add(ws);
-    P.lastSeen = now(); this.ubah(L, P);
+    P.lastSeen = now();
     kirim(ws, { t: 'hai', now: now(), deadline: P.deadline, status: P.status });
   }
   /** Hubungkan soket guru ke monitor satu ujian. */
@@ -542,7 +549,6 @@ export class Engine extends DurableObject {
       const { L, me } = inf.s;
       const set = L.socks.get(me.id);
       if (set) { set.delete(ws); if (!set.size) L.socks.delete(me.id); }
-      const P = L.P.get(me.id); if (P) this.ubah(L, P);
       inf.s = null;
     }
   }
@@ -591,11 +597,11 @@ export class Engine extends DurableObject {
     if (!s) { kirim(ws, { t: 'perlu_ikut', id: m.id }); return; }   // mis. setelah server dimulai ulang
     try {
       if (m.t === 'j') {
-        let r = this.simpanInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, perangkat: s.perangkat }, false);
+        let r = this.simpanInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, perangkat: s.perangkat, mulai: m.mulai }, false);
         if (r === null) { const bank = await this.getBank(s.u.bankId); r = this.finalisasi(s.L, s.L.P.get(s.me.id), s.u, bank, 'waktu habis'); }
         kirim(ws, { t: 'ok', v: m.v, now: now(), ...r });
       } else {
-        const r = await this.selesaiInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, alasan: m.a, perangkat: s.perangkat });
+        const r = await this.selesaiInti(s.L, s.me, { jawaban: m.j, pelanggaran: m.p, alasan: m.a, perangkat: s.perangkat, mulai: m.mulai });
         kirim(ws, { t: 'hasil', id: m.id, data: r });
       }
     } catch (e) {
@@ -659,13 +665,11 @@ export class Engine extends DurableObject {
     if (this.ketukan % 8 === 0) this.rawat().catch(e => console.error('rawat', e && e.stack || e));
   }
 
+  /** Monitor cukup status (belum / mengerjakan / pending / selesai) — dikirim hanya saat status berubah. */
   monRow(L, P) {
-    const set = L.socks.get(P.nis);
     return {
-      nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status, mulai: P.mulai || 0, deadline: P.deadline || 0, selesai: P.selesai || 0,
-      pelanggaran: P.pelanggaran || 0, terjawab: P.terjawab || 0, ragu: P.ragu || 0, lastSeen: P.lastSeen || 0,
-      nilai: P.hasil ? P.hasil.nilai : null, catatan: P.catatan || '', adaPerangkat: !!P.perangkat, sinkron: P.ver === P.syncVer,
-      online: !!(set && set.size)
+      nis: P.nis, nama: P.nama, kelas: P.kelas, status: statusTampil(P, now()), mulai: P.mulai || 0, deadline: P.deadline || 0, selesai: P.selesai || 0,
+      nilai: P.hasil ? P.hasil.nilai : null, catatan: P.catatan || '', adaPerangkat: !!P.perangkat
     };
   }
   async monitorPayload(L, u) {
@@ -673,7 +677,7 @@ export class Engine extends DurableObject {
     const peserta = [];
     for (const [nis, s] of siswa) {
       const P = L.P.get(nis);
-      peserta.push(P ? this.monRow(L, P) : { nis, nama: s.nama, kelas: s.kelas, status: 'belum', terjawab: 0, ragu: 0, pelanggaran: 0, nilai: null, catatan: '', lastSeen: 0, online: false });
+      peserta.push(P ? this.monRow(L, P) : { nis, nama: s.nama, kelas: s.kelas, status: 'belum', mulai: 0, deadline: 0, selesai: 0, nilai: null, catatan: '', adaPerangkat: false });
     }
     for (const P of L.P.values()) if (!siswa.has(P.nis)) peserta.push(this.monRow(L, P));
     return { ujian: this.ringkas(u), peserta, serverTime: now() };
@@ -783,11 +787,11 @@ A.ujianSaya = async function (d, me) {
     const L = this.L.get(u.id);
     if (!L) { cariD1.push(u.id); continue; }
     const P = L.P.get(me.id);
-    if (P && (P.status === 'selesai' || P.status === 'mengerjakan')) st[u.id] = { status: P.status, nilai: P.hasil ? P.hasil.nilai : null, perlu: P.hasil ? P.hasil.perluKoreksi : 0 };
+    if (P && (P.status === 'selesai' || P.status === 'mengerjakan')) st[u.id] = { status: P.status, nilai: P.hasil ? P.hasil.nilai : null, perlu: P.hasil ? P.hasil.perluKoreksi : 0, oto: P.otomatis };
   }
   if (cariD1.length) {
-    const r = await this.env.DB.prepare(`SELECT ujian_id, nilai, perlu FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`).bind(me.id, JSON.stringify(cariD1)).all();
-    r.results.forEach(x => { st[x.ujian_id] = { status: 'selesai', nilai: x.nilai, perlu: x.perlu }; });
+    const r = await this.env.DB.prepare(`SELECT ujian_id, nilai, perlu, json_extract(data, '$.otomatis') AS oto FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`).bind(me.id, JSON.stringify(cariD1)).all();
+    r.results.forEach(x => { st[x.ujian_id] = { status: 'selesai', nilai: x.nilai, perlu: x.perlu, oto: x.oto }; });
   }
   return list.map(u => {
     const h = st[u.id], b = this.bankIdx.get(u.bankId);
@@ -797,6 +801,7 @@ A.ujianSaya = async function (d, me) {
       jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? h.status : 'belum'
     };
     if (h && h.status === 'selesai' && u.tampilNilai) { item.nilai = h.nilai; item.perluKoreksi = h.perlu; }
+    if (h && h.status === 'selesai' && h.oto) item.susulan = true;   // dinilai otomatis: jawaban dari perangkat masih diterima
     return item;
   });
 };
@@ -1082,7 +1087,8 @@ A.hasilUjian = async function (d, me) {
   await this.syncD1();
   const map = new Map(), L = this.L.get(u.id);
   if (L) {
-    for (const P of L.P.values()) map.set(P.nis, (P.status === 'selesai' || P.status === 'mengerjakan') ? rekam(P) : { nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status });
+    const t = now();
+    for (const P of L.P.values()) map.set(P.nis, (P.status === 'selesai' || P.status === 'mengerjakan') ? { ...rekam(P), status: statusTampil(P, t) } : { nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status });
   } else {
     const r = await this.env.DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(u.id).all();
     r.results.forEach(x => map.set(x.nis, JSON.parse(x.data)));

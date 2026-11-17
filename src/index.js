@@ -118,7 +118,7 @@ const AKSI = {
       .sort((a, b) => a.mulai - b.mulai);
     const hasil = {};
     if (list.length) {
-      const r = await env.DB.prepare(`SELECT ujian_id, nilai, perlu FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`)
+      const r = await env.DB.prepare(`SELECT ujian_id, nilai, perlu, json_extract(data, '$.otomatis') AS oto FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`)
         .bind(me.id, JSON.stringify(list.map(u => u.id))).all();
       r.results.forEach(x => { hasil[x.ujian_id] = x; });
     }
@@ -130,6 +130,7 @@ const AKSI = {
         jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? 'selesai' : 'belum'
       };
       if (h && u.tampilNilai) { item.nilai = h.nilai; item.perluKoreksi = h.perlu; }
+      if (h && h.oto) item.susulan = true;   // dinilai otomatis: jawaban dari perangkat masih diterima
       return item;
     });
   }
