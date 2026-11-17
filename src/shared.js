@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.2.0-cloudflare';
+export const VERSI = '2.3.0-cloudflare';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -271,6 +271,26 @@ export function hitungTerjawab_(jw) {
   for (const k in j) { if (!kosong_(j[k])) n++; }
   return n;
 }
+
+// ---------------------------------------------------------------------------
+//  KOMPRES DATA HASIL (hemat ukuran D1: batas paket gratis 500 MB per database)
+//  Rekam hasil per siswa ±2,7 KB JSON → ±1,5 KB. Data lama (JSON biasa) tetap terbaca.
+// ---------------------------------------------------------------------------
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function keB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function dariB64(t) { const s = atob(t), u8 = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i); return u8; }
+export async function kemasData(obj) {
+  const s = JSON.stringify(obj);
+  if (s.length < 400) return s;
+  const z = new Uint8Array(await new Response(new Blob([s]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+  return 'z:' + keB64(z);
+}
+export async function bukaData(t) {
+  if (typeof t !== 'string') return t;
+  if (!t.startsWith('z:')) return JSON.parse(t);
+  return JSON.parse(await new Response(new Blob([dariB64(t.slice(2))]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text());
+}
+export const bukaSemua = rows => Promise.all(rows.map(bukaData));
 
 // ---------------------------------------------------------------------------
 //  LAIN-LAIN

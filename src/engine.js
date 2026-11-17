@@ -57,6 +57,32 @@ function dariRekam(rec) {
   return Object.assign(rekam(rec), { nis: String(rec.nis), jawaban: jw, perangkat: '', lastSeen: rec.selesai || 0, terjawab: X.hitungTerjawab_(jw), ragu: (jw.r || []).length, syncVer: rec.ver || 0, mv: 0 });
 }
 
+/** Hanya untuk uji lokal (DEV_MODE): menghitung baris dibaca/ditulis di D1 dan di SQLite internal Durable Object. */
+function pasangUkur(self) {
+  const u = self.ukur = { d1r: 0, d1w: 0, d1q: 0, dor: 0, dow: 0, doq: 0 };
+  const asliSql = self.sql, kursor = [];
+  const lipat = n => { for (const c of kursor.splice(0, n)) { u.dor += c.rowsRead; u.dow += c.rowsWritten; } };
+  self.sql = { exec: (...a) => { const c = asliSql.exec(...a); u.doq++; kursor.push(c); if (kursor.length > 4000) lipat(2000); return c; } };
+  self.ukurBaca = () => { lipat(kursor.length); return { ...u }; };
+  const catat = r => { if (r && r.meta) { u.d1r += r.meta.rows_read || 0; u.d1w += r.meta.rows_written || 0; u.d1q++; } return r; };
+  const asli = new WeakMap();
+  const bungkus = st => {
+    const p = new Proxy(st, { get(t, k) {
+      if (k === 'bind') return (...a) => bungkus(t.bind(...a));
+      if (k === 'all' || k === 'run') return async (...a) => catat(await t[k](...a));
+      if (k === 'first') return async col => { const r = catat(await t.all()); const row = r.results[0] ?? null; return col ? (row ? row[col] : null) : row; };
+      const v = t[k]; return typeof v === 'function' ? v.bind(t) : v;
+    } });
+    asli.set(p, st); return p;
+  };
+  const DB = self.env.DB;
+  self.env.DB = new Proxy(DB, { get(t, k) {
+    if (k === 'prepare') return sql => bungkus(t.prepare(sql));
+    if (k === 'batch') return async sts => { const r = await t.batch(sts.map(x => asli.get(x) || x)); r.forEach(catat); return r; };
+    const v = t[k]; return typeof v === 'function' ? v.bind(t) : v;
+  } });
+}
+
 export class Engine extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -65,6 +91,7 @@ export class Engine extends DurableObject {
     this.env = { ...env, MEDIA_REPO: repo(env.MEDIA_REPO), DATA_REPO: repo(env.DATA_REPO) };
     this.repoContoh = /^namaakun\//i.test(env.MEDIA_REPO || '') || /^namaakun\//i.test(env.DATA_REPO || '');
     this.sql = ctx.storage.sql;
+    if (env.DEV_MODE === '1') pasangUkur(this);   // uji lokal: hitung baris dibaca/ditulis (D1 & penyimpanan internal)
     this.L = new Map();          // ujianId → sesi langsung
     this.memuat = new Map();
     this.bankFull = new Map();
@@ -105,7 +132,7 @@ export class Engine extends DurableObject {
     this.bankIdx = new Map(b.results.map(r => { const x = JSON.parse(r.meta); return [x.id, x]; }));
     this.ujian = new Map(u.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
     this.bankFull.clear();
-    this.jmlSiswa = null;
+    this.jmlSiswa = null; this.roster = null;
   }
   metaGet(k) { const r = [...this.sql.exec(`SELECT v FROM meta WHERE k = ?`, k)]; return r.length ? r[0].v : null; }
   metaSet(k, v) { this.sql.exec(`INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)`, k, String(v)); }
@@ -212,10 +239,10 @@ export class Engine extends DurableObject {
     for (const row of r.results) {
       diD1.add(row.nis);
       const P = L.P.get(row.nis);
-      if (!P) { L.P.set(row.nis, dariRekam(JSON.parse(row.data))); continue; }
+      if (!P) { L.P.set(row.nis, dariRekam(await X.bukaData(row.data))); continue; }
       if (row.ver === P.ver) P.syncVer = P.ver;
       else if (row.ver > P.ver && P.status === 'selesai') {
-        const rec = JSON.parse(row.data);
+        const rec = await X.bukaData(row.data);
         Object.assign(P, { hasil: rec.hasil, manual: rec.manual || {}, catatan: rec.catatan, ver: row.ver, syncVer: row.ver });
       }
     }
@@ -227,14 +254,24 @@ export class Engine extends DurableObject {
     return L;
   }
 
+  /** Daftar peserta (per kombinasi kelas) disimpan di memori: monitor & Hasil tidak membaca ulang D1 tiap dibuka. */
   async siswaUjian(u, L) {
     if (L && L.siswa) return L.siswa;
-    const r = await this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa WHERE kelas IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(u.kelas || [])).all();
-    const m = new Map(r.results.map(s => [String(s.nis), s]));
+    const kelas = [...(u.kelas || [])].sort(), kunci = kelas.join('|');
+    const c = this.roster || (this.roster = new Map());
+    let p = c.get(kunci);
+    if (!p) {
+      p = this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa WHERE kelas IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(kelas)).all()
+        .then(r => new Map(r.results.map(s => [String(s.nis), s])));
+      p.catch(() => { if (c.get(kunci) === p) c.delete(kunci); });
+      c.set(kunci, p);
+      if (c.size > 40) c.delete(c.keys().next().value);
+    }
+    const m = await p;
     if (L) L.siswa = m;
     return m;
   }
-  lupakanSiswa() { this.jmlSiswa = null; for (const L of this.L.values()) L.siswa = null; }
+  lupakanSiswa() { this.jmlSiswa = null; this.roster = null; for (const L of this.L.values()) L.siswa = null; }
 
   // ==========================================================================
   //  PENYIMPANAN SESI
@@ -275,7 +312,7 @@ export class Engine extends DurableObject {
       const tulis = [], hapus = [], tanda = [], ujianBerubah = new Set();
       for (const L of this.L.values()) for (const P of L.P.values()) {
         if (P.ver === P.syncVer) continue;
-        if (P.status === 'selesai') tulis.push({ u: L.id, n: P.nis, v: P.hasil ? P.hasil.nilai : null, p: P.hasil ? P.hasil.perluKoreksi : 0, r: P.ver, d: JSON.stringify(rekam(P)) });
+        if (P.status === 'selesai') tulis.push({ u: L.id, n: P.nis, s: P.otomatis ? 'otomatis' : 'selesai', v: P.hasil ? P.hasil.nilai : null, p: P.hasil ? P.hasil.perluKoreksi : 0, r: P.ver, d: await X.kemasData(rekam(P)) });
         else if (P.status === 'direset') hapus.push({ u: L.id, n: P.nis });
         else { P.syncVer = P.ver; continue; }
         tanda.push([L, P, P.ver]); ujianBerubah.add(L.id);
@@ -292,7 +329,7 @@ export class Engine extends DurableObject {
     const DB = this.env.DB, st = [];
     for (const g of potong(tulis, 800000)) {
       st.push(DB.prepare(`INSERT INTO hasil (ujian_id, nis, status, nilai, perlu, ver, data)
-        SELECT json_extract(value,'$.u'), json_extract(value,'$.n'), 'selesai', json_extract(value,'$.v'), json_extract(value,'$.p'), json_extract(value,'$.r'), json_extract(value,'$.d') FROM json_each(?) WHERE true
+        SELECT json_extract(value,'$.u'), json_extract(value,'$.n'), coalesce(json_extract(value,'$.s'), 'selesai'), json_extract(value,'$.v'), json_extract(value,'$.p'), json_extract(value,'$.r'), json_extract(value,'$.d') FROM json_each(?) WHERE true
         ON CONFLICT(ujian_id, nis) DO UPDATE SET status=excluded.status, nilai=excluded.nilai, perlu=excluded.perlu, ver=excluded.ver, data=excluded.data WHERE excluded.ver >= hasil.ver`).bind(JSON.stringify(g)));
     }
     for (const g of potong(hapus, 800000)) {
@@ -302,7 +339,9 @@ export class Engine extends DurableObject {
   }
   /** Tulis rekam (koreksi / hitung ulang) langsung ke D1 lalu samakan dengan sesi langsung. */
   async tulisRekam(ujianId, recs) {
-    await this.tulisHasilD1(recs.map(rec => ({ u: ujianId, n: rec.nis, v: rec.hasil ? rec.hasil.nilai : null, p: rec.hasil ? rec.hasil.perluKoreksi : 0, r: rec.ver, d: JSON.stringify(rec) })), []);
+    const baris = [];
+    for (const rec of recs) baris.push({ u: ujianId, n: rec.nis, s: rec.otomatis ? 'otomatis' : 'selesai', v: rec.hasil ? rec.hasil.nilai : null, p: rec.hasil ? rec.hasil.perluKoreksi : 0, r: rec.ver, d: await X.kemasData(rec) });
+    await this.tulisHasilD1(baris, []);
     const L = this.L.get(ujianId);
     if (L) for (const rec of recs) {
       const P = L.P.get(rec.nis);
@@ -717,7 +756,7 @@ export class Engine extends DurableObject {
         const id = k.slice(6), u = this.ujian.get(id);
         const r = await DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(id).all();
         const arsip = { ujianId: id, nama: u ? u.nama : '', mapel: u ? u.mapel : '', bankId: u ? u.bankId : '', peserta: {}, diperbarui: now() };
-        r.results.forEach(x => { arsip.peserta[x.nis] = JSON.parse(x.data); });
+        for (const x of r.results) arsip.peserta[x.nis] = await X.bukaData(x.data);
         files['hasil/' + id + '.json'] = JSON.stringify(arsip);
       }
     }
@@ -737,9 +776,13 @@ const A = Engine.prototype.AKSI = {};
 
 A._dev = async function (d) {
   if (this.env.DEV_MODE !== '1') throw new AppError('Tidak tersedia');
-  X.setOffset(d.offset);
+  if (d.offset !== undefined) X.setOffset(d.offset);
   if (d.rawat) await this.rawat();
-  return { offset: d.offset, sockets: this.sockets.size, live: this.L.size };
+  if (d.flush) { this.flushJw(); await this.syncD1(); }
+  if (d.ukuranHasil) return { hasil: await this.env.DB.prepare(`SELECT COUNT(*) AS n, AVG(length(data)) AS rata, SUM(length(data)) AS total FROM hasil`).first(), db: await ukuranD1(this.env.DB) };
+  const ukur = this.ukurBaca ? this.ukurBaca() : null;
+  if (d.ukurNol && this.ukur) Object.keys(this.ukur).forEach(k => { this.ukur[k] = 0; });
+  return { offset: d.offset, sockets: this.sockets.size, live: this.L.size, ukur };
 };
 
 // ---------------------------------------------------------------- masuk & daftar (juga tersedia lewat soket tunggal)
@@ -790,7 +833,7 @@ A.ujianSaya = async function (d, me) {
     if (P && (P.status === 'selesai' || P.status === 'mengerjakan')) st[u.id] = { status: P.status, nilai: P.hasil ? P.hasil.nilai : null, perlu: P.hasil ? P.hasil.perluKoreksi : 0, oto: P.otomatis };
   }
   if (cariD1.length) {
-    const r = await this.env.DB.prepare(`SELECT ujian_id, nilai, perlu, json_extract(data, '$.otomatis') AS oto FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`).bind(me.id, JSON.stringify(cariD1)).all();
+    const r = await this.env.DB.prepare(`SELECT ujian_id, nilai, perlu, (status = 'otomatis') AS oto FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`).bind(me.id, JSON.stringify(cariD1)).all();
     r.results.forEach(x => { st[x.ujian_id] = { status: 'selesai', nilai: x.nilai, perlu: x.perlu, oto: x.oto }; });
   }
   return list.map(u => {
@@ -993,7 +1036,7 @@ A.deleteUjian = async function (d, me) {
     const L = this.L.get(u.id);
     if (L) { for (const P of L.P.values()) if (P.status === 'mengerjakan' || P.status === 'selesai') n++; }
     else n = (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM hasil WHERE ujian_id = ?`).bind(u.id).first()).n;
-    if (n && !d.paksa) throw new AppError('Sudah ada ' + n + ' peserta yang mengerjakan. Hapus tetap akan menyimpan hasil yang sudah ada di database.', 'ADA_PESERTA');
+    if (n && !d.paksa) throw new AppError('Sudah ada ' + n + ' peserta yang mengerjakan. ' + (d.hapusHasil ? 'Hasil mereka ikut dihapus dari database.' : 'Hasil yang sudah ada tetap tersimpan di database.'), 'ADA_PESERTA');
     if (L) {
       await this.syncD1();
       for (const ws of [...L.mons]) { kirim(ws, { t: 'err', k: 'pantau', code: 'ERR', msg: 'Ujian ini sudah dihapus' }); this.akhiriIkatan(ws, 1000, 'dihapus'); }
@@ -1004,6 +1047,13 @@ A.deleteUjian = async function (d, me) {
     await this.env.DB.prepare(`DELETE FROM ujian WHERE id = ?`).bind(u.id).run();
     this.ujian.delete(u.id);
     this.tandaiCadangan('ujian');
+    if (d.hapusHasil) {
+      // mengosongkan ruang D1. Cadangan hasil yang belum terkirim ke GitHub dikirim dulu (bila diatur).
+      const k = 'hasil:' + u.id;
+      if (this.bdirty.has(k) && this.env.DATA_REPO && this.env.GITHUB_TOKEN) await this.cadangkan().catch(() => {});
+      await this.env.DB.prepare(`DELETE FROM hasil WHERE ujian_id = ?`).bind(u.id).run();
+      this.bdirty.delete(k); this.metaSet('bdirty', JSON.stringify([...this.bdirty]));
+    }
     return true;
   });
 };
@@ -1091,7 +1141,7 @@ A.hasilUjian = async function (d, me) {
     for (const P of L.P.values()) map.set(P.nis, (P.status === 'selesai' || P.status === 'mengerjakan') ? { ...rekam(P), status: statusTampil(P, t) } : { nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status });
   } else {
     const r = await this.env.DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(u.id).all();
-    r.results.forEach(x => map.set(x.nis, JSON.parse(x.data)));
+    for (const x of r.results) map.set(x.nis, await X.bukaData(x.data));
   }
   for (const [nis, s] of await this.siswaUjian(u, L)) if (!map.has(nis)) map.set(nis, { nis, nama: s.nama, kelas: s.kelas, status: 'belum' });
   const peserta = [...map.values()];
@@ -1105,7 +1155,7 @@ async function ambilRekam(self, u, nisList) {
   const out = new Map(), L = self.L.get(u.id);
   if (L) { for (const nis of nisList) { const P = L.P.get(nis); if (P) out.set(nis, rekam(P)); } return out; }
   const r = await self.env.DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?1 AND nis IN (SELECT value FROM json_each(?2))`).bind(u.id, JSON.stringify(nisList)).all();
-  r.results.forEach(x => out.set(x.nis, JSON.parse(x.data)));
+  for (const x of r.results) out.set(x.nis, await X.bukaData(x.data));
   return out;
 }
 function terapkanManual(rec, manualBaru, bank) {
@@ -1160,7 +1210,7 @@ A.hitungUlang = async function (d, me) {
     const L = this.L.get(u.id);
     let recs;
     if (L) recs = [...L.P.values()].filter(P => P.status === 'selesai').map(rekam);
-    else recs = (await this.env.DB.prepare(`SELECT data FROM hasil WHERE ujian_id = ?`).bind(u.id).all()).results.map(x => JSON.parse(x.data)).filter(r => r.status === 'selesai');
+    else recs = (await X.bukaSemua((await this.env.DB.prepare(`SELECT data FROM hasil WHERE ujian_id = ?`).bind(u.id).all()).results.map(x => x.data))).filter(r => r.status === 'selesai');
     const t = now();
     recs.forEach(rec => { rec.hasil = X.hitungHasil_(bank, rec.jawaban, rec.manual); rec.ver = t; });
     if (recs.length) await this.tulisRekam(u.id, recs);
@@ -1330,9 +1380,14 @@ A.statusSistem = async function (d, me) {
   return {
     versi: X.VERSI, sesiAktif: this.L.size, mengerjakan, siswaOnline, monitor,
     mediaRepo: this.env.MEDIA_REPO || (this.repoContoh ? 'masih "namaakun/…" — ganti di wrangler.jsonc' : ''), dataRepo: this.env.DATA_REPO || '', adaToken: !!this.env.GITHUB_TOKEN,
-    antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0, cadanganGagal: this.cadanganGagal || null
+    antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0, cadanganGagal: this.cadanganGagal || null,
+    ukuranDb: await ukuranD1(this.env.DB), batasDb: 500 * 1024 * 1024
   };
 };
+/** Ukuran database D1 (byte) dari keterangan kueri; 0 bila tidak tersedia. */
+async function ukuranD1(DB) {
+  try { const r = await DB.prepare(`SELECT 1`).all(); return (r.meta && (r.meta.size_after || r.meta.sizeAfter)) || 0; } catch (e) { return 0; }
+}
 A.imporGithub = async function (d, me) {
   X.reqAdmin_(me);
   return this.kunci(async () => {
@@ -1372,7 +1427,7 @@ A.imporGithub = async function (d, me) {
       const a = js(p); if (!a || !a.peserta) continue;
       for (const nis in a.peserta) {
         const rec = a.peserta[nis]; if (!rec || rec.status !== 'selesai') continue;
-        hasilRows.push({ u: m[1], n: String(nis), v: rec.hasil ? rec.hasil.nilai : null, p: rec.hasil ? rec.hasil.perluKoreksi : 0, r: rec.ver || 1, d: JSON.stringify(rec) });
+        hasilRows.push({ u: m[1], n: String(nis), s: rec.otomatis ? 'otomatis' : 'selesai', v: rec.hasil ? rec.hasil.nilai : null, p: rec.hasil ? rec.hasil.perluKoreksi : 0, r: rec.ver || 1, d: await X.kemasData(rec) });
       }
     }
     n.hasil = hasilRows.length;

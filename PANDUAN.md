@@ -64,9 +64,20 @@ Batas harian paket gratis Cloudflare **direset pukul 08.00 WITA** (00.00 UTC). P
 |---|---|---|
 | Permintaan Worker ("Requests today") | 100.000 | ±8.100–9.000 (1 per siswa per ujian; +1 bagi siswa yang koneksinya sempat putus; terburuk ±15.900) |
 | Permintaan Durable Object (20 pesan WebSocket = 1) | 100.000 | ±17.000 |
-| Baris ditulis D1 | 100.000 | ±16.000 |
-| Baris dibaca D1 | 5.000.000 | jauh di bawah |
-| Waktu aktif Durable Object | 13.000 GB-detik | ±4.500 |
+| Baris dibaca D1 | 5.000.000 | ±50.000 (1%) |
+| Baris ditulis D1 | 100.000 | ±9.000 (9%) |
+| Baris dibaca penyimpanan internal Durable Object | 5.000.000 | ±8.000 |
+| Baris ditulis penyimpanan internal Durable Object | 100.000 | ±27.000 (27%) |
+| Waktu aktif Durable Object | 13.000 GB-detik | paling banyak ±10.800 (satu mesin ujian 24 jam penuh) |
+
+Angka di atas diukur dari simulasi (`GURU=50 MENIT=90 npm run beban`), termasuk 50 guru membuat & mengedit bank
+soal dan 10 guru membuka halaman Hasil.
+
+**Ukuran database D1** (batas paket gratis **500 MB** per database): hasil tiap siswa disimpan terkompresi
+±1,4 KB, jadi 1300 siswa × 6 ujian ≈ 11 MB per hari ujian → cukup untuk ±45 hari ujian penuh. Ukuran saat ini
+terlihat di **Pengaturan → Ukuran database**. Bila mendekati penuh: unduh Excel hasil ujian lama, lalu di
+**Jadwal ujian** hapus jadwal tersebut dan pilih **Hapus hasilnya juga** (cadangan di GitHub `cbt-data` tidak ikut
+terhapus).
 
 Membuka halaman aplikasi (HTML) **tidak** dihitung kuota. Pemakaian sebenarnya bisa dilihat di
 dash.cloudflare.com → *Workers & Pages* → `cbt-sekolah` → *Metrics*.

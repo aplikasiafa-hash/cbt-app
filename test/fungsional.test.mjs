@@ -260,5 +260,24 @@ ok('hapus bank', r.ok);
 r = await call('statusSistem', {}, ADM);
 ok('status sistem', r.ok && r.data.versi, r);
 
+// hapus jadwal beserta hasilnya (mengosongkan ruang D1)
+{
+  const t1 = Date.now();
+  let r2 = await call('saveUjian', { nama: 'Hapus Saya', bankId, kelas: ['X-1'], mulai: t1 - 60000, selesai: t1 + 3600000, durasi: 30, acakSoal: false, acakOpsi: false, tampilNilai: true, pakaiToken: false }, ADM);
+  const UH = r2.data;
+  const sx = S1;
+  const mx = (await call('mulaiUjian', { ujianId: UH.id, perangkat: 'dH' }, sx)).data;
+  r2 = await call('selesaiUjian', { ujianId: UH.id, jawaban: { j: {}, r: [] }, perangkat: 'dH', mulai: mx.mulai }, sx);
+  ok('ujian untuk dihapus: siswa selesai', r2.ok && r2.data.status === 'selesai', r2);
+  await call('sinkronSekarang', {}, ADM);
+  r2 = await call('deleteUjian', { id: UH.id, hapusHasil: true }, ADM);
+  ok('hapus jadwal + hasil: minta konfirmasi bila ada peserta', !r2.ok && r2.code === 'ADA_PESERTA' && /ikut dihapus/.test(r2.error), r2);
+  r2 = await call('deleteUjian', { id: UH.id, hapusHasil: true, paksa: true }, ADM);
+  ok('hapus jadwal + hasil', r2.ok, r2);
+  const uk = (await call('_dev', { ukuranHasil: true })).data;
+  r2 = await call('ujianSaya', {}, sx);
+  ok('jadwal & hasil terhapus', r2.ok && !r2.data.some(u => u.id === UH.id), r2);
+  ok('ukuran database terbaca untuk Pengaturan', (await call('statusSistem', {}, ADM)).data.ukuranDb > 0);
+}
 console.log(fails ? `\n${fails} GAGAL` : '\nSEMUA LULUS');
 process.exit(fails ? 1 : 0);
