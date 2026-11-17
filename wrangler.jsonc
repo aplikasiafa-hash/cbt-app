@@ -13,7 +13,15 @@
   "workers_dev": true,
 
   // Aplikasi guru & siswa (HTML) — aset statis, gratis & tidak dihitung kuota
-  "assets": { "directory": "./public", "binding": "ASSETS", "html_handling": "auto-trailing-slash" },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    // HEMAT KUOTA: hanya /api yang membangunkan Worker. Alamat lain (bot pemindai seperti /wp-admin,
+    // /.env, dll.) dijawab 404.html oleh lapisan aset tanpa dihitung sebagai request Worker.
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api", "/api/*"]
+  },
 
   // Database D1 "cbt-sekolah-db". Dibuat OTOMATIS saat pemasangan pertama.
   // Bila Anda membuatnya manual di dashboard, hapus tanda // di depan database_id
@@ -28,11 +36,12 @@
   "durable_objects": { "bindings": [{ "name": "ENGINE", "class_name": "Engine" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Engine"] }],
 
-  // Perawatan tiap 10 menit (kumpul otomatis bila perangkat siswa mati, cadangan GitHub)
-  "triggers": { "crons": ["*/10 * * * *"] },
+  // Perawatan tiap jam pada jam sekolah 07.00–18.00 WITA (= 23.00–10.00 UTC): 12 kali/hari.
+  // Kumpul otomatis saat ujian tetap berjalan tepat waktu lewat alarm internal, tidak bergantung pada ini.
+  "triggers": { "crons": ["0 23,0-10 * * *"] },
 
   "vars": {
-    // >>> GANTI "namaakun" dengan nama akun GitHub Anda <<<
+    // Akun GitHub: aplikasiafa-hash
     // Repo PUBLIK untuk gambar soal
     "MEDIA_REPO": "aplikasiafa-hash/cbt-media",
     // Repo PRIVAT untuk cadangan otomatis soal & hasil ("" = tidak dipakai)
@@ -43,5 +52,5 @@
   // GITHUB_TOKEN TIDAK ditulis di sini. Simpan di dashboard Cloudflare:
   // Workers & Pages → cbt-sekolah → Settings → Variables and Secrets → Add → Secret
 
-  "observability": { "enabled": true, "head_sampling_rate": 0.25 }
+  "observability": { "enabled": true, "head_sampling_rate": 0.05 }
 }

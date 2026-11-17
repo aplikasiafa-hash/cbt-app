@@ -1150,6 +1150,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <tr><td>Repo cadangan (DATA_REPO)</td><td>{{ st.dataRepo || '— tidak dipakai' }}</td></tr>
         <tr><td>Token GitHub</td><td>{{ st.adaToken ? 'terpasang' : '— belum diatur' }}</td></tr>
         <tr v-if="st.dataRepo"><td>Cadangan terakhir</td><td>{{ st.cadanganTerakhir ? fmtWaktu(st.cadanganTerakhir) : 'belum pernah' }}<span v-if="st.antrianCadangan" class="muted"> · {{ st.antrianCadangan }} menunggu</span></td></tr>
+        <tr v-if="st.cadanganGagal"><td>Cadangan gagal</td><td style="color:var(--merah,#c0392b)">{{ fmtWaktu(st.cadanganGagal.t) }} — {{ st.cadanganGagal.pesan }}<br><span class="muted small">Periksa token GitHub (lihat PASANG-TOKEN-GITHUB.md), lalu tekan tombol di bawah.</span></td></tr>
       </tbody></table>
       <div class="row" style="gap:8px">
         <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Menyimpan…' : (st && st.dataRepo ? 'Simpan & cadangkan ke GitHub sekarang' : 'Simpan semua hasil sekarang') }}</button>
@@ -1509,7 +1510,9 @@ app.component('v-beranda', {
   computed: { salam() { const h = new Date().getHours(); return h < 11 ? 'Selamat pagi' : h < 15 ? 'Selamat siang' : h < 18 ? 'Selamat sore' : 'Selamat malam'; } },
   async mounted() {
     try { this.d = await api('dashboard'); } catch (e) { toast(e.message, 'err'); }
-    api('getConfig').then(c => { S.config = c; localStorage.setItem('cbt_g_config', JSON.stringify(c)); }).catch(() => {});
+    // pengaturan sekolah disegarkan maksimal tiap 10 menit (hemat kuota)
+    if (Date.now() - Number(localStorage.getItem('cbt_g_config_t') || 0) > 600000)
+      api('getConfig').then(c => { S.config = c; localStorage.setItem('cbt_g_config', JSON.stringify(c)); localStorage.setItem('cbt_g_config_t', String(Date.now())); }).catch(() => {});
   }
 });
 
@@ -1799,7 +1802,9 @@ app.component('v-monitor', {
         if (this.mati) return;
         if (!this.d) this.muat(true);
         this.gagal++;
-        if (!document.hidden) this.tWs = setTimeout(() => this.sambung(), Math.min(30000, 1000 * 2 ** Math.min(this.gagal, 5)) * (0.5 + Math.random()));
+        // tiap percobaan = 1 request kuota: setelah 6 kali gagal, coba lagi tiap 5 menit (monitor tetap disegarkan tiap 60 detik)
+        const jeda = this.gagal >= 6 ? 300000 : Math.min(30000, 1000 * 2 ** Math.min(this.gagal, 5)) * (0.5 + Math.random());
+        if (!document.hidden) this.tWs = setTimeout(() => this.sambung(), jeda);
       };
     },
     putus() { this.mati = true; clearTimeout(this.tWs); const ws = this.ws; this.ws = null; if (ws) try { ws.close(1000); } catch (e) {} },

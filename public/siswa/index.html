@@ -457,7 +457,8 @@ const API_URL = window.CBT_API_URL || '/api';
 
 const SIMPAN_DETIK = window.CBT_SIMPAN_DETIK || 60;       // kirim jawaban ke server tiap 60 detik bila ada perubahan (lewat WebSocket: hemat kuota)
 const HTTP_SIMPAN_DETIK = 180;   // cadangan lewat HTTP bila WebSocket tidak bisa tersambung
-const DAFTAR_MENIT = 10;         // daftar ujian disegarkan dari server tiap 10 menit (status jadwal dihitung di perangkat)
+const DAFTAR_MENIT = 15;         // daftar ujian disegarkan dari server tiap 15 menit (status jadwal dihitung di perangkat)
+const WS_GAGAL_MAKS = 6;         // setelah 6 kali gagal tersambung, coba lagi hanya tiap 10 menit (hemat kuota)
 const WS_URL = (() => {
   try { const u = new URL(API_URL, location.href); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'; u.pathname = u.pathname.replace(/\/+$/, '') + '/ws'; u.search = ''; return u.href; }
   catch (e) { return ''; }
@@ -564,7 +565,10 @@ const app = Vue.createApp({
     this.wsGagal = 0; this.wsMati = true; this.wsBuka = false; this.ws = null; this.terakhirKirim = -999; this.terakhirHttp = 0;
     onAuthGagal = () => { if (this.layar !== 'ujian') { this.bersihSesi(); this.layar = 'login'; this.err = 'Sesi berakhir, silakan masuk lagi.'; } };
     if (this.layar === 'daftar') this.muatDaftar();
-    else if (this.apiSiap) api('ping', {}, { retry: 1 }).then(r => { this.sekolah = r; }).catch(() => {});
+    else if (this.apiSiap && Date.now() - Number(localStorage.getItem('cbt_s_sekolah_t') || 0) > 86400000) {
+      // nama sekolah disimpan di perangkat, ditanyakan ke server maksimal sekali sehari
+      api('ping', {}, { retry: 1 }).then(r => { this.sekolah = r; localStorage.setItem('cbt_s_sekolah', JSON.stringify(r)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now())); }).catch(() => {});
+    }
     this.timerDaftar = setInterval(() => {
       this.tik++;
       if (this.layar !== 'daftar' || !this.daftar) return;
@@ -588,7 +592,7 @@ const app = Vue.createApp({
       try {
         const r = await api('loginSiswa', { nis: this.f.nis, password: this.f.pw }, { retry: 2 });
         tokenSesi = r.token; this.user = r.user; this.sekolah = r.sekolah;
-        localStorage.setItem('cbt_s_token', r.token); localStorage.setItem('cbt_s_user', JSON.stringify(r.user)); localStorage.setItem('cbt_s_sekolah', JSON.stringify(r.sekolah));
+        localStorage.setItem('cbt_s_token', r.token); localStorage.setItem('cbt_s_user', JSON.stringify(r.user)); localStorage.setItem('cbt_s_sekolah', JSON.stringify(r.sekolah)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now()));
         this.f.pw = ''; this.layar = 'daftar'; this.muatDaftar();
       } catch (e) { this.err = e.message; } finally { this.sibuk = false; }
     },
@@ -691,7 +695,8 @@ const app = Vue.createApp({
     },
     jadwalSambung() {
       clearTimeout(this.tWs);
-      const d = Math.min(30000, 1000 * 2 ** Math.min(this.wsGagal, 5)) * (0.5 + Math.random());
+      // tiap percobaan = 1 request kuota → jeda makin panjang, lalu tiap 10 menit bila terus gagal (jawaban tetap dikirim lewat HTTP)
+      const d = this.wsGagal >= WS_GAGAL_MAKS ? 600000 * (0.8 + Math.random() * 0.4) : Math.min(30000, 1000 * 2 ** Math.min(this.wsGagal, 5)) * (0.5 + Math.random());
       this.tWs = setTimeout(() => this.sambung(), d);
     },
     putus() {

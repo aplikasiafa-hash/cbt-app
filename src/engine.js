@@ -71,6 +71,7 @@ export class Engine extends DurableObject {
     await this.muatCache();
     this.bdirty = new Set(parse_(this.metaGet('bdirty'), []));
     this.lastBackup = Number(this.metaGet('lastBackup') || 0);
+    this.cadanganGagal = parse_(this.metaGet('cadanganGagal'), null);
     const ids = [...this.sql.exec(`SELECT DISTINCT u FROM p UNION SELECT DISTINCT u FROM jw`)].map(r => r.u);
     for (const id of ids) await this.getL(id);
     this.alarmAt = (await this.ctx.storage.getAlarm()) || 0;
@@ -604,7 +605,14 @@ export class Engine extends DurableObject {
   async cadangkanOtomatis() {
     if (!this.env.DATA_REPO || !this.env.GITHUB_TOKEN || !this.bdirty.size) return null;
     if (Date.now() - this.lastBackup < BACKUP_MS) return null;
-    return this.cadangkan();
+    // gagal (mis. token salah) → jangan dicoba tiap pemicu, tunggu 6 jam atau sampai admin menekan tombol cadangkan
+    if (this.cadanganGagal && Date.now() - this.cadanganGagal.t < 6 * 3600000) return null;
+    try { const r = await this.cadangkan(); this.cadanganGagal = null; this.metaSet('cadanganGagal', ''); return r; }
+    catch (e) {
+      this.cadanganGagal = { t: Date.now(), pesan: X.errInfo(e).msg.slice(0, 300) };
+      this.metaSet('cadanganGagal', JSON.stringify(this.cadanganGagal));
+      throw e;
+    }
   }
   async cadangkan() {
     const repo = await cekRepoData(this.env);
@@ -1156,7 +1164,8 @@ A.sinkronSekarang = async function (d, me) {
   const n = await this.syncD1();
   let cadangan = null;
   if (me.r === 'admin' && this.env.DATA_REPO && this.env.GITHUB_TOKEN) {
-    try { cadangan = await this.cadangkan(); } catch (e) { cadangan = { error: X.errInfo(e).msg }; }
+    try { cadangan = await this.cadangkan(); this.cadanganGagal = null; this.metaSet('cadanganGagal', ''); }
+    catch (e) { cadangan = { error: X.errInfo(e).msg }; this.cadanganGagal = { t: Date.now(), pesan: cadangan.error.slice(0, 300) }; this.metaSet('cadanganGagal', JSON.stringify(this.cadanganGagal)); }
   }
   return { disinkron: n || 0, cadangan, adaRepo: !!this.env.DATA_REPO };
 };
@@ -1167,7 +1176,7 @@ A.statusSistem = async function (d, me) {
   return {
     versi: X.VERSI, sesiAktif: this.L.size, mengerjakan, siswaOnline, monitor,
     mediaRepo: this.env.MEDIA_REPO || (this.repoContoh ? 'masih "namaakun/…" — ganti di wrangler.jsonc' : ''), dataRepo: this.env.DATA_REPO || '', adaToken: !!this.env.GITHUB_TOKEN,
-    antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0
+    antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0, cadanganGagal: this.cadanganGagal || null
   };
 };
 A.imporGithub = async function (d, me) {
