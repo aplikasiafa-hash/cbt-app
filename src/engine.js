@@ -559,9 +559,7 @@ export class Engine extends DurableObject {
     return {
       ujian: { id: u.id, nama: u.nama, mapel: u.mapel, durasi: u.durasi, maxPelanggaran: u.maxPelanggaran, tampilNilai: u.tampilNilai, keterangan: u.keterangan },
       soal: X.soalUntukSiswa_(u, bank, me.id, P.percobaan),
-      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran,
-      // aplikasi ujian memeriksa token keluar dari pengawas tanpa internet
-      keluarHash: await X.hashKeluar_(u.id, await X.tokenKeluar_(u.id, this.secret))
+      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran
     };
   }
 
@@ -827,7 +825,6 @@ export class Engine extends DurableObject {
     for (const P of L.P.values()) if (!siswa.has(P.nis) && ok(P.kelas)) peserta.push(this.monRow(L, P));
     const uj = this.ringkas(u);
     if (kelas) uj.kelas = u.kelas.filter(k => kelas.has(k));
-    uj.tokenKeluar = await X.tokenKeluar_(u.id, this.secret);   // untuk keluar dari aplikasi ujian (Android/Windows)
     return { ujian: uj, peserta, serverTime: now(), pemilik: !!me && u.guruId === me.id, semuaKelas: !kelas };
   }
 
@@ -1325,12 +1322,6 @@ A.gantiTokenUjian = async function (d, me) {
 
 // ---------------------------------------------------------------- siswa (ujian)
 A.mulaiUjian = async function (d, me) { X.reqSiswa_(me); return this.mulaiInti(me, d); };
-/** Cadangan bila paket lama belum membawa sidik token keluar: periksa ke server (butuh internet). */
-A.cekTokenKeluar = async function (d, me) {
-  X.reqSiswa_(me);
-  const u = this.ujianWajib(d.ujianId);
-  return str_(d.token).trim().toUpperCase() === await X.tokenKeluar_(u.id, this.secret);
-};
 A.simpanJawaban = async function (d, me) {
   X.reqSiswa_(me);
   const u = this.ujianWajib(d.ujianId), L = await this.getL(u.id);

@@ -155,7 +155,7 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
-## Hak akses (versi 2.8.0-CBT)
+## Hak akses (versi 2.9.0-CBT)
 
 | | Admin | Guru pengawas | Guru pemilik soal | Siswa |
 |---|---|---|---|---|
@@ -186,7 +186,11 @@ GitHub Actions, gratis) dan memasangnya ada di `ExamBrowser/README.md`. Ringkasn
 
 - Android: terkunci sejak siswa menekan **Mulai mengerjakan** (sematkan layar + lapisan mengambang bila siswa keluar).
 - Windows: layar penuh & tombol pintas Windows diblokir sejak dibuka; terkunci penuh sejak **Mulai mengerjakan**.
-- Keluar sebelum jawaban terkirim hanya dengan **token keluar** (Monitoring → di bawah token ujian).
+- **Tidak ada token keluar.** Selama ujian aplikasi tidak bisa ditutup; kunci terbuka sendiri setelah jawaban
+  terkirim, atau setelah pengawas **mereset** ujian siswa itu di Monitoring (perangkat perlu internet saat itu).
+  Darurat (perangkat macet tanpa internet): mulai ulang HP/komputer — jawaban tetap tersimpan di perangkat dan
+  ujian dilanjutkan saat aplikasi dibuka lagi.
+- Isi-otomatis dan tawaran **"Simpan sandi"** Google/Edge dimatikan di kedua aplikasi.
 - Jadwal → **Wajib memakai aplikasi CBT Ujian** agar ujian tidak bisa dikerjakan dari browser biasa.
 
 ## Halaman ujian hanya untuk aplikasi + sumber teracak
