@@ -266,6 +266,10 @@ table.tbl{width:100%;border-collapse:collapse}
 .kelas-pick label{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--garis);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px}
 .kelas-pick label.on{border-color:var(--grafit);background:#F3F4F5;font-weight:600}
 .kelas-pick input{accent-color:var(--grafit)}
+.kelas-pick.kecil{margin-top:4px;gap:5px}.kelas-pick.kecil label{padding:3px 8px;font-size:12.5px}
+.awas-kelas{margin-top:8px;padding:10px 12px;border:1px dashed var(--garis);border-radius:7px;background:#FAFBFC}
+.awas-baris{padding:6px 0}.awas-baris+.awas-baris{border-top:1px solid var(--garis-2)}
+.pengawas-sel{min-width:150px;max-width:240px}.pengawas-sel div+div{margin-top:3px}
 .list-plain{list-style:none;margin:0;padding:0}
 .list-plain li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--garis-2)}
 .list-plain li:last-child{border-bottom:0}
@@ -380,20 +384,21 @@ table.tbl{width:100%;border-collapse:collapse}
           <a class="btn" href="#/jadwal" v-if="S.user.role==='admin'">Jadwalkan ujian</a>
           <a class="btn" href="#/monitor">Pantau ujian</a>
         </div>
+        <p class="small muted" style="margin-top:10px" v-if="S.user.role!=='admin'">Anda ditugaskan sebagai pengawas di <b>{{ d.jumlahAwas }}</b> jadwal ujian.</p>
       </div>
       <div class="grid2" style="gap:16px">
         <div class="panel">
-          <div class="panel-head"><h3>Ujian 24 jam ke depan</h3><a href="#/jadwal" class="small">Semua jadwal</a></div>
+          <div class="panel-head"><h3>{{ S.user.role==='admin' ? 'Ujian 24 jam ke depan' : 'Ujian yang Anda awasi (24 jam ke depan)' }}</h3><a href="#/jadwal" class="small">{{ S.user.role==='admin' ? 'Semua jadwal' : 'Jadwal hari ini' }}</a></div>
           <ul class="list-plain" v-if="d.mendatang.length">
             <li v-for="u in d.mendatang" :key="u.id">
-              <div><b>{{ u.nama }}</b><div class="small muted">{{ fmtWaktu(u.mulai) }} – {{ fmtJam(u.selesai) }} · {{ u.kelas.join(', ') }}</div></div>
+              <div><b>{{ u.nama }}</b><div class="small muted">{{ fmtWaktu(u.mulai) }} – {{ fmtJam(u.selesai) }} · {{ (u.awasi || u.kelas).join(', ') }}</div></div>
               <div class="row" style="gap:6px">
                 <status-jadwal :s="u.status"></status-jadwal>
                 <a class="btn btn-sm" :href="'#/monitor/'+u.id">Pantau</a>
               </div>
             </li>
           </ul>
-          <div v-else class="empty">Belum ada ujian yang dijadwalkan dalam 24 jam ke depan.</div>
+          <div v-else class="empty">{{ S.user.role==='admin' ? 'Belum ada ujian yang dijadwalkan dalam 24 jam ke depan.' : 'Tidak ada ujian yang Anda awasi dalam 24 jam ke depan.' }}</div>
         </div>
         <div class="panel">
           <div class="panel-head"><h3>Bank soal terakhir diubah</h3><a href="#/bank" class="small">Semua bank soal</a></div>
@@ -725,10 +730,25 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-jadwal">
   <div class="page">
     <div class="page-head">
-      <div><h1>Jadwal ujian</h1><p>{{ S.user.role==='admin' ? 'Atur kapan ujian dibuka, kelas peserta, dan aturannya.' : 'Jadwal ujian yang memakai bank soal Anda. Penjadwalan dilakukan admin.' }}</p></div>
-      <button class="btn btn-primary" v-if="S.user.role==='admin'" @click="bukaForm()">Buat jadwal</button>
+      <div v-if="admin"><h1>Jadwal ujian</h1><p>Atur kapan ujian dibuka, kelas peserta, pengawas, dan aturannya.</p></div>
+      <div v-else><h1>Jadwal ujian hari ini</h1><p>{{ hariIni }}. Jadwal dan pengawas ditetapkan admin.</p></div>
+      <button class="btn btn-primary" v-if="admin" @click="bukaForm()">Buat jadwal</button>
     </div>
-    <div class="panel">
+    <div class="panel" v-if="!admin">
+      <div v-if="!list" class="loading">Memuat…</div>
+      <div v-else-if="!list.length" class="empty"><b>Tidak ada ujian hari ini</b>Ujian yang dijadwalkan hari ini akan tampil di sini.</div>
+      <div v-else class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Ujian</th><th>Kelas</th><th>Waktu</th><th class="num">Durasi</th><th>Pengawas</th></tr></thead>
+        <tbody><tr v-for="u in list" :key="u.id">
+          <td><b>{{ u.nama }}</b><div class="small muted">{{ u.mapel }} · {{ u.bankJudul }} · {{ u.jumlahSoal }} soal</div></td>
+          <td style="max-width:220px"><span class="tag" v-for="k in u.kelas" :key="k">{{ k }}</span></td>
+          <td class="small">{{ fmtTgl(u.mulai) }}<br><span class="muted">{{ fmtJam(u.mulai) }} – {{ fmtTgl(u.selesai)===fmtTgl(u.mulai) ? fmtJam(u.selesai) : fmtWaktu(u.selesai) }}</span></td>
+          <td class="num">{{ u.durasi }} mnt</td>
+          <td class="pengawas-sel"><daftar-pengawas :u="u"></daftar-pengawas></td>
+        </tr></tbody>
+      </table></div>
+    </div>
+    <div class="panel" v-else>
       <div class="toolbar">
         <input class="input search" v-model="q" placeholder="Cari nama ujian…" type="search">
         <select class="input" v-model="fStatus"><option value="">Semua status</option><option value="berlangsung">Berlangsung</option><option value="akan">Akan datang</option><option value="selesai">Selesai</option><option value="nonaktif">Nonaktif</option></select>
@@ -736,18 +756,19 @@ table.tbl{width:100%;border-collapse:collapse}
       <div v-if="!list" class="loading">Memuat…</div>
       <div v-else-if="!tampil.length" class="empty"><b>Belum ada jadwal</b>{{ S.user.role==='admin' ? 'Klik “Buat jadwal” lalu pilih bank soal dan kelas peserta.' : 'Admin belum menjadwalkan ujian dari bank soal Anda.' }}</div>
       <div v-else class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>Ujian</th><th>Kelas</th><th>Waktu</th><th class="num">Durasi</th><th>Token</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Ujian</th><th>Kelas</th><th>Waktu</th><th class="num">Durasi</th><th>Pengawas</th><th>Token</th><th>Status</th><th></th></tr></thead>
         <tbody><tr v-for="u in tampil" :key="u.id">
           <td><b>{{ u.nama }}</b><div class="small muted">{{ u.mapel }} · {{ u.bankJudul }} · {{ u.jumlahSoal }} soal</div></td>
           <td style="max-width:220px"><span class="tag" v-for="k in u.kelas.slice(0,4)" :key="k">{{ k }}</span><span class="small muted" v-if="u.kelas.length>4">+{{ u.kelas.length-4 }}</span></td>
           <td class="small">{{ fmtTgl(u.mulai) }}<br><span class="muted">{{ fmtJam(u.mulai) }} – {{ fmtTgl(u.selesai)===fmtTgl(u.mulai) ? fmtJam(u.selesai) : fmtWaktu(u.selesai) }}</span></td>
           <td class="num">{{ u.durasi }} mnt</td>
+          <td class="pengawas-sel"><daftar-pengawas :u="u"></daftar-pengawas></td>
           <td><b v-if="u.pakaiToken" class="tnum" style="letter-spacing:.08em;color:var(--tinta)">{{ u.token }}</b><span v-else class="small muted">—</span></td>
           <td><status-jadwal :s="u.status"></status-jadwal></td>
           <td class="act">
             <a class="btn btn-sm" :href="'#/monitor/'+u.id">Pantau</a>
             <a class="btn btn-sm" :href="'#/hasil/'+u.id">Hasil</a>
-            <menu-pop v-if="S.user.role==='admin'" :items="[{t:'Ubah jadwal',f:()=>bukaForm(u)},{t:'Salin jadwal',f:()=>bukaForm(u,true)},{t:'Hapus',f:()=>hapus(u),danger:true}]"></menu-pop>
+            <menu-pop :items="[{t:'Ubah jadwal',f:()=>bukaForm(u)},{t:'Salin jadwal',f:()=>bukaForm(u,true)},{t:'Hapus',f:()=>hapus(u),danger:true}]"></menu-pop>
           </td>
         </tr></tbody>
       </table></div>
@@ -776,6 +797,10 @@ table.tbl{width:100%;border-collapse:collapse}
               <label v-for="k in kelasTampil" :key="k.nama" :class="{on: f.kelas.includes(k.nama)}"><input type="checkbox" :value="k.nama" v-model="f.kelas">{{ k.nama }}</label>
               <span v-if="!kelasTampil.length" class="small muted">Belum ada kelas. Tambahkan di Pengaturan atau impor data siswa.</span>
             </div>
+          </div>
+          <div class="field"><span>Nama pengawas</span>
+            <pengawas-input v-model="f.pengawas" :guru="guru" :kelas="f.kelas"></pengawas-input>
+            <small>Guru yang dipilih hanya bisa memantau kelas yang ia awasi di menu Monitoring.</small>
           </div>
           <div class="grid3">
             <label class="field"><span>Dibuka</span><input type="datetime-local" v-model="f.mulaiStr" required></label>
@@ -806,10 +831,10 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-pilih-ujian">
   <div class="panel">
     <div v-if="!list" class="loading">Memuat…</div>
-    <div v-else-if="!list.length" class="empty"><b>Belum ada jadwal ujian</b>Ujian muncul di sini setelah dijadwalkan.</div>
+    <div v-else-if="!list.length" class="empty"><b>{{ kosong[0] }}</b>{{ kosong[1] }}</div>
     <ul v-else class="list-plain">
       <li v-for="u in list" :key="u.id">
-        <div><b>{{ u.nama }}</b><div class="small muted">{{ u.mapel }} · {{ fmtWaktu(u.mulai) }} · {{ u.kelas.join(', ') }}</div></div>
+        <div><b>{{ u.nama }}</b><div class="small muted">{{ u.mapel }} · {{ fmtWaktu(u.mulai) }} · {{ tujuan==='monitor' && u.awasi ? 'Kelas yang Anda awasi: ' + u.awasi.join(', ') : u.kelas.join(', ') }}</div></div>
         <div class="row" style="gap:8px"><status-jadwal :s="u.status"></status-jadwal><a class="btn btn-sm" :href="'#/'+tujuan+'/'+u.id">Buka</a></div>
       </li>
     </ul>
@@ -819,14 +844,14 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-monitor">
   <div class="page">
     <template v-if="!S.route.id">
-      <div class="page-head"><div><h1>Monitoring</h1><p>Pilih ujian untuk memantau peserta secara langsung.</p></div></div>
+      <div class="page-head"><div><h1>Monitoring</h1><p>{{ S.user.role==='admin' ? 'Pilih ujian untuk memantau peserta secara langsung.' : 'Ujian yang Anda awasi. Anda hanya melihat siswa di kelas yang Anda awasi.' }}</p></div></div>
       <pilih-ujian tujuan="monitor"></pilih-ujian>
     </template>
     <template v-else>
       <div v-if="!d" class="loading">Memuat…</div>
       <template v-else>
         <div class="page-head">
-          <div><a href="#/monitor" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ fmtWaktu(d.ujian.mulai) }} – {{ fmtJam(d.ujian.selesai) }} · {{ d.ujian.durasi }} menit</p></div>
+          <div><a href="#/monitor" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ fmtWaktu(d.ujian.mulai) }} – {{ fmtJam(d.ujian.selesai) }} · {{ d.ujian.durasi }} menit<template v-if="!d.semuaKelas"> · Kelas yang Anda awasi: <b>{{ d.ujian.kelas.join(', ') }}</b></template></p></div>
           <div class="token-box" v-if="d.ujian.pakaiToken"><div><div class="small muted">Token ujian</div><b>{{ d.ujian.token }}</b></div><button class="btn btn-sm" @click="gantiToken">Ganti token</button></div>
         </div>
         <div class="panel panel-pad" style="margin-bottom:16px">
@@ -840,7 +865,7 @@ table.tbl{width:100%;border-collapse:collapse}
             <span class="chip" :class="langsung ? 'chip-hijau' : 'chip-abu'">{{ langsung ? '● Status diperbarui otomatis' : (terputus ? 'Koneksi terputus' : 'Menyambung…') }}</span>
             <span class="small muted">Diperbarui {{ fmtJamDetik(diperbarui) }}</span>
             <button class="btn btn-sm" @click="sambungLagi" v-if="!langsung">Perbarui</button>
-            <a class="btn btn-sm" :href="'#/hasil/'+d.ujian.id">Lihat hasil</a>
+            <a class="btn btn-sm" :href="'#/hasil/'+d.ujian.id" v-if="S.user.role==='admin' || d.pemilik">Lihat hasil</a>
           </div>
         </div>
         <div class="panel">
@@ -1095,6 +1120,7 @@ table.tbl{width:100%;border-collapse:collapse}
     <div class="page-head"><div><h1>Data guru</h1><p>Akun guru untuk menyusun bank soal. Admin bisa mengelola semua data dan jadwal.</p></div>
       <div class="row">
         <button class="btn" @click="unduh" :disabled="!list || !list.length">Unduh Excel</button>
+        <button class="btn" @click="imp={teks:'',rows:[]}">Impor</button>
         <button class="btn btn-primary" @click="f={username:'',nama:'',role:'guru',aktif:true,password:'',mapel:[]}">Tambah guru</button>
       </div></div>
     <div class="panel">
@@ -1124,6 +1150,24 @@ table.tbl{width:100%;border-collapse:collapse}
         </div>
         <div class="modal-foot"><button type="button" class="btn" @click="f=null">Batal</button><button class="btn btn-primary" :disabled="sibuk">Simpan</button></div>
       </form>
+    </div>
+
+    <div class="modal-bg" v-if="imp" @click.self="imp=null">
+      <div class="modal lebar">
+        <div class="modal-head"><div><h2>Impor guru</h2><p class="muted small">Unggah file Excel/CSV, atau salin-tempel dari Excel. Kolom: <b>Nama pengguna, Nama</b>, dan opsional <b>Mata pelajaran, Password, Peran, Status</b> — sama dengan file <i>Unduh Excel</i>. Baris judul boleh ada.</p></div><button class="x" @click="imp=null">×</button></div>
+        <div class="modal-body">
+          <div class="row" style="margin-bottom:10px"><input type="file" accept=".xlsx,.xls,.csv" @change="bacaFile"></div>
+          <textarea class="input" rows="7" v-model="imp.teks" @input="parseTeks" placeholder="atau tempel di sini (salin dari Excel)…" style="font-family:ui-monospace,Consolas,monospace;font-size:13px"></textarea>
+          <template v-if="imp.rows.length">
+            <p class="small" style="margin:12px 0 6px">Terbaca <b>{{ imp.rows.length }}</b> guru (<b>{{ hitungImpor.baru }}</b> baru, <b>{{ hitungImpor.ubah }}</b> sudah ada). Contoh 5 baris pertama:</p>
+            <div class="tbl-wrap"><table class="tbl" style="border:1px solid var(--garis-2)"><thead><tr><th>Nama pengguna</th><th>Nama</th><th>Mata pelajaran</th><th>Password</th><th>Peran</th><th>Status</th></tr></thead>
+              <tbody><tr v-for="(r,i) in imp.rows.slice(0,5)" :key="i"><td>{{ r.username }}</td><td>{{ r.nama }}</td><td>{{ r.mapel }}</td>
+                <td class="muted">{{ r.password && !/^\(/.test(r.password) ? '••••' : (adaUser(r.username) ? '(tetap)' : '(= nama pengguna)') }}</td><td>{{ r.peran || (adaUser(r.username) ? '(tetap)' : 'Guru') }}</td><td>{{ r.status || (adaUser(r.username) ? '(tetap)' : 'Aktif') }}</td></tr></tbody></table></div>
+            <p class="small muted" style="margin-top:10px">Guru dicocokkan lewat <b>nama pengguna</b>: yang sudah ada diperbarui, yang belum ada ditambahkan. Guru baru tanpa password → password sama dengan nama pengguna. Untuk guru yang sudah ada, sel kosong berarti tidak diubah. Akun Anda sendiri tetap Admin dan aktif.</p>
+          </template>
+        </div>
+        <div class="modal-foot"><button class="btn" @click="imp=null">Batal</button><button class="btn btn-primary" :disabled="!imp.rows.length || sibuk" @click="impor">{{ sibuk ? 'Mengimpor…' : 'Impor ' + imp.rows.length + ' guru' }}</button></div>
+      </div>
     </div>
   </div>
 </script>
@@ -1202,6 +1246,34 @@ table.tbl{width:100%;border-collapse:collapse}
     <input ref="i" v-model="baru" @keydown="kd" @blur="tambah" :list="saran ? 'dl-'+uid : null" placeholder="Ketik lalu Enter">
     <datalist v-if="saran" :id="'dl-'+uid"><option v-for="s in saran" :key="s" :value="s"></option></datalist>
   </div>
+</script>
+
+<script type="text/x-template" id="t-pengawas-input">
+  <div>
+    <div class="chips-input" @click="$refs.i.focus()">
+      <span v-for="(p,i) in modelValue" :key="p.id">{{ namaGuru(p) }}<button type="button" @click.stop="hapus(i)" :aria-label="'Hapus ' + namaGuru(p)">×</button></span>
+      <input ref="i" v-model="baru" @keydown="kd" @input="cekPilih" @blur="baru && tambah(true)" :list="'dl-pw-'+uid" placeholder="Ketik nama guru lalu Enter">
+      <datalist :id="'dl-pw-'+uid"><option v-for="g in pilihan" :key="g.id" :value="label(g)"></option></datalist>
+    </div>
+    <div class="awas-kelas" v-if="modelValue.length && kelas.length > 1">
+      <div class="small muted" style="margin-bottom:4px">Kelas yang diawasi tiap pengawas:</div>
+      <div v-for="p in modelValue" :key="p.id" class="awas-baris">
+        <b class="small">{{ namaGuru(p) }}</b>
+        <div class="kelas-pick kecil">
+          <label :class="{on: !aktifKelas(p).length}"><input type="checkbox" :checked="!aktifKelas(p).length" @change="semua(p)">Semua kelas</label>
+          <label v-for="k in kelas" :key="k" :class="{on: aktifKelas(p).includes(k)}"><input type="checkbox" :checked="aktifKelas(p).includes(k)" @change="tog(p,k)">{{ k }}</label>
+        </div>
+      </div>
+    </div>
+  </div>
+</script>
+
+<script type="text/x-template" id="t-daftar-pengawas">
+  <span v-if="!(u.pengawas||[]).length" class="small muted">—</span>
+  <template v-else><div v-for="p in u.pengawas" :key="p.id" class="small">
+    <b v-if="p.id===S.user.id">{{ p.nama }} (Anda)</b><span v-else>{{ p.nama }}</span>
+    <span class="muted" v-if="p.kelas.length && p.kelas.length < u.kelas.length"> · {{ p.kelas.join(', ') }}</span>
+  </div></template>
 </script>
 
 <!-- ======================= LIBRARY ======================= -->
@@ -1353,7 +1425,7 @@ const Sok = {
     });
   }
 };
-const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'importGuru', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
 /** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
 async function apiSok(action, data, tok, onAuth) {
   if (!Sok.tersedia()) return null;
@@ -1597,6 +1669,41 @@ app.component('chips-input', {
   }
 });
 
+// Pengawas ujian: pilih guru seperti isian mata pelajaran (ketik lalu Enter / pilih dari daftar),
+// lalu (bila kelas peserta lebih dari satu) tandai kelas yang diawasi tiap pengawas. Kosong = semua kelas.
+app.component('pengawas-input', {
+  props: ['modelValue', 'guru', 'kelas'], emits: ['update:modelValue'], template: '#t-pengawas-input',
+  data: () => ({ baru: '', uid: ++chipUid }),
+  computed: {
+    pilihan() { const ada = new Set(this.modelValue.map(p => p.id)); return (this.guru || []).filter(g => g.aktif && !ada.has(g.id)).sort((a, b) => a.nama.localeCompare(b.nama)); }
+  },
+  methods: {
+    label(g) { return g.nama + ' (' + g.username + ')'; },
+    namaGuru(p) { const g = (this.guru || []).find(x => x.id === p.id); return g ? g.nama : (p.nama || 'Guru'); },
+    cari(teks) {
+      const t = teks.trim().toLowerCase(); if (!t) return null;
+      const p = this.pilihan;
+      return p.find(g => this.label(g).toLowerCase() === t) || p.find(g => g.username === t || g.nama.toLowerCase() === t)
+        || (p.filter(g => g.nama.toLowerCase().includes(t) || g.username.includes(t)).length === 1 ? p.find(g => g.nama.toLowerCase().includes(t) || g.username.includes(t)) : null);
+    },
+    cekPilih() { const g = this.pilihan.find(x => this.label(x) === this.baru); if (g) this.tambah(); },   // dipilih dari daftar
+    kd(e) { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); this.tambah(); } else if (e.key === 'Backspace' && !this.baru && this.modelValue.length) this.hapus(this.modelValue.length - 1); },
+    tambah(diam) {
+      const v = this.baru.replace(/,$/, ''); if (!v.trim()) { this.baru = ''; return; }
+      const g = this.cari(v);
+      if (!g) { if (!diam) toast('Guru “' + v.trim() + '” tidak ditemukan. Pilih dari daftar.', 'err'); return; }
+      this.baru = '';
+      this.$emit('update:modelValue', [...this.modelValue, { id: g.id, nama: g.nama, kelas: [] }]);
+    },
+    hapus(i) { const a = [...this.modelValue]; a.splice(i, 1); this.$emit('update:modelValue', a); },
+    aktifKelas(p) { return p.kelas.filter(k => this.kelas.includes(k)); },
+    ganti(p, kelas) { this.$emit('update:modelValue', this.modelValue.map(x => x.id === p.id ? { ...x, kelas } : x)); },
+    semua(p) { this.ganti(p, []); },
+    tog(p, k) { const a = this.aktifKelas(p); const b = a.includes(k) ? a.filter(x => x !== k) : [...a, k]; this.ganti(p, b.length === this.kelas.length ? [] : b); }
+  }
+});
+app.component('daftar-pengawas', { props: ['u'], template: '#t-daftar-pengawas' });
+
 app.component('v-login', {
   template: '#t-login',
   data: () => ({ u: '', p: '', err: '', loading: false, sekolah: S.config.namaSekolah, apiSiap: !!API_URL }),
@@ -1816,22 +1923,31 @@ app.component('v-editor', {
 
 app.component('v-jadwal', {
   template: '#t-jadwal',
-  data: () => ({ list: null, bank: [], q: '', fStatus: '', f: null, sibuk: false }),
+  data: () => ({ list: null, bank: [], guru: [], q: '', fStatus: '', f: null, sibuk: false }),
   computed: {
+    admin() { return S.user.role === 'admin'; },
+    hariIni() { return new Date(sekarang()).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); },
     tampil() { const q = this.q.toLowerCase(); return (this.list || []).filter(u => (!q || u.nama.toLowerCase().includes(q)) && (!this.fStatus || u.status === this.fStatus)); },
     bankGroup() { const g = {}; this.bank.forEach(b => (g[b.mapel || 'Lainnya'] = g[b.mapel || 'Lainnya'] || []).push(b)); return Object.keys(g).sort().map(m => ({ mapel: m, list: g[m] })); },
     kelasTampil() { return (S.config.kelas || []).filter(k => !this.f.tingkat || k.tingkat === this.f.tingkat); }
   },
-  mounted() { this.muat(); if (S.user.role === 'admin') api('listBank').then(b => this.bank = b).catch(() => {}); },
+  mounted() {
+    this.muat();
+    if (this.admin) { api('listBank').then(b => this.bank = b).catch(() => {}); api('listGuru').then(g => this.guru = g).catch(() => {}); }
+  },
   methods: {
-    async muat() { try { this.list = await api('listUjian'); } catch (e) { toast(e.message, 'err'); this.list = []; } },
+    async muat() {
+      // guru: hanya ujian hari ini (urut jam mulai); admin: semua jadwal
+      try { const l = await api('listUjian', { untuk: 'jadwal' }); this.list = this.admin ? l : l.sort((a, b) => a.mulai - b.mulai || a.nama.localeCompare(b.nama)); }
+      catch (e) { toast(e.message, 'err'); this.list = []; }
+    },
     bukaForm(u, salin) {
       if (u) {
-        this.f = { ...u, kelas: [...u.kelas], mulaiStr: keInput(u.mulai), selesaiStr: keInput(u.selesai) };
+        this.f = { ...u, kelas: [...u.kelas], pengawas: (u.pengawas || []).map(p => ({ id: p.id, nama: p.nama, kelas: [...(p.kelas || [])] })), mulaiStr: keInput(u.mulai), selesaiStr: keInput(u.selesai) };
         if (salin) { this.f.id = ''; this.f.nama = u.nama + ' (salinan)'; }
       } else {
         const m = new Date(sekarang() + 86400000); m.setHours(7, 30, 0, 0);
-        this.f = { id: '', nama: '', bankId: '', tingkat: '', kelas: [], mulaiStr: keInput(m.getTime()), selesaiStr: keInput(m.getTime() + 2 * 3600000), durasi: 90, acakSoal: true, acakOpsi: true, tampilNilai: false, pakaiToken: true, maxPelanggaran: 3, aktif: true, keterangan: '' };
+        this.f = { id: '', nama: '', bankId: '', tingkat: '', kelas: [], mulaiStr: keInput(m.getTime()), selesaiStr: keInput(m.getTime() + 2 * 3600000), durasi: 90, acakSoal: true, acakOpsi: true, tampilNilai: false, pakaiToken: true, maxPelanggaran: 3, aktif: true, keterangan: '', pengawas: [] };
       }
     },
     pilihBank() { const b = this.bank.find(x => x.id === this.f.bankId); if (b && !this.f.tingkat) this.f.tingkat = b.tingkat; if (b && !this.f.nama) this.f.nama = b.judul; },
@@ -1841,7 +1957,9 @@ app.component('v-jadwal', {
       if (!(selesai > mulai)) return toast('Waktu ditutup harus setelah waktu dibuka', 'err');
       if (!this.f.kelas.length) return toast('Pilih minimal satu kelas', 'err');
       this.sibuk = true;
-      try { await api('saveUjian', { ...this.f, mulai, selesai }); toast('Jadwal tersimpan. Peserta sudah disiapkan.'); this.f = null; this.muat(); }
+      // kelas pengawas dirapikan: hanya kelas peserta; semua kelas = [] (berarti mengawasi seluruh kelas)
+      const pengawas = (this.f.pengawas || []).map(p => { const k = p.kelas.filter(x => this.f.kelas.includes(x)); return { id: p.id, kelas: k.length === this.f.kelas.length ? [] : k }; });
+      try { await api('saveUjian', { ...this.f, pengawas, mulai, selesai }); toast('Jadwal tersimpan. Peserta sudah disiapkan.'); this.f = null; this.muat(); }
       catch (e) { toast(e.message, 'err', 6000); } finally { this.sibuk = false; }
     },
     async hapus(u) {
@@ -1860,10 +1978,16 @@ app.component('v-jadwal', {
 
 app.component('pilih-ujian', {
   props: ['tujuan'], template: '#t-pilih-ujian', data: () => ({ list: null }),
+  computed: {
+    kosong() {
+      if (S.user.role === 'admin') return ['Belum ada jadwal ujian', 'Ujian muncul di sini setelah dijadwalkan.'];
+      return this.tujuan === 'monitor' ? ['Anda belum ditugaskan sebagai pengawas', 'Admin menetapkan pengawas setiap ujian di menu Jadwal ujian.'] : ['Belum ada ujian dari bank soal Anda', 'Hasil muncul di sini setelah admin menjadwalkan bank soal Anda.'];
+    }
+  },
   async mounted() {
     try {
       const urut = { berlangsung: 0, akan: 1, selesai: 2, nonaktif: 3 };
-      this.list = (await api('listUjian')).sort((a, b) => (urut[a.status] - urut[b.status]) || (a.status === 'selesai' ? b.mulai - a.mulai : a.mulai - b.mulai));
+      this.list = (await api('listUjian', { untuk: this.tujuan })).sort((a, b) => (urut[a.status] - urut[b.status]) || (a.status === 'selesai' ? b.mulai - a.mulai : a.mulai - b.mulai));
     } catch (e) { toast(e.message, 'err'); this.list = []; }
   }
 });
@@ -2133,9 +2257,42 @@ app.component('v-siswa', {
 });
 
 app.component('v-guru', {
-  template: '#t-guru', data: () => ({ list: null, f: null, sibuk: false }),
+  template: '#t-guru', data: () => ({ list: null, f: null, imp: null, sibuk: false }),
+  computed: {
+    hitungImpor() { const ada = new Set((this.list || []).map(g => g.username)); let baru = 0, ubah = 0; new Set(this.imp.rows.map(r => r.username)).forEach(u => ada.has(u) ? ubah++ : baru++); return { baru, ubah }; }
+  },
   mounted() { this.muat(); },
   methods: {
+    adaUser(u) { return (this.list || []).some(g => g.username === u); },
+    petakan(baris) {
+      if (!baris.length) return [];
+      const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+      const h = baris[0].map(norm);
+      let iU = h.findIndex(x => ['namapengguna', 'username', 'user', 'pengguna', 'akun', 'login'].includes(x));
+      let iN = h.findIndex((x, i) => i !== iU && ['nama', 'namalengkap', 'namaguru'].includes(x));
+      let iM = h.findIndex(x => ['matapelajaran', 'mapel', 'pelajaran', 'matapelajaranyangdiampu'].includes(x));
+      let iP = h.findIndex(x => ['password', 'katasandi', 'sandi', 'pass'].includes(x));
+      let iR = h.findIndex(x => ['peran', 'role', 'hakakses', 'akses'].includes(x));
+      let iS = h.findIndex(x => ['status', 'aktif', 'statusakun'].includes(x));
+      let data = baris.slice(1);
+      if (iU < 0 || iN < 0) { [iU, iN, iM, iP, iR, iS] = [0, 1, 2, 3, 4, 5]; data = /^(namapengguna|username|no)$/.test(norm(baris[0][0])) ? baris.slice(1) : baris; }
+      const sel = (r, i) => i >= 0 ? String(r[i] ?? '').trim() : '';
+      return data.map(r => ({ username: sel(r, iU).toLowerCase(), nama: sel(r, iN), mapel: sel(r, iM), password: sel(r, iP), peran: sel(r, iR), status: sel(r, iS) })).filter(r => r.username && r.nama);
+    },
+    parseTeks() { const sep = this.imp.teks.includes('\t') ? '\t' : (this.imp.teks.includes(';') ? ';' : ','); this.imp.rows = this.petakan(this.imp.teks.replace(/\r/g, '').split('\n').filter(l => l.trim()).map(l => l.split(sep))); },
+    async bacaFile(e) {
+      const f = e.target.files[0]; if (!f) return;
+      try { const X = await muatXLSX(); const wb = X.read(await f.arrayBuffer(), { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; this.imp.rows = this.petakan(X.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })); if (!this.imp.rows.length) toast('Tidak ada data yang terbaca. Pastikan ada kolom Nama pengguna dan Nama.', 'err'); }
+      catch (err) { toast(err.message, 'err'); }
+    },
+    async impor() {
+      this.sibuk = true;
+      try {
+        const r = await api('importGuru', { rows: this.imp.rows }, { retry: 2 });
+        toast(`${r.baru} guru baru, ${r.ubah} diperbarui${r.lewati.length ? ', ' + r.lewati.length + ' baris dilewati (nama pengguna tidak valid)' : ''}`, 'ok', 6000);
+        this.imp = null; this.muat();
+      } catch (e) { toast(e.message, 'err', 6000); } finally { this.sibuk = false; }
+    },
     async muat() { try { this.list = await api('listGuru'); } catch (e) { toast(e.message, 'err'); this.list = []; } },
     async unduh() {
       try {
