@@ -155,6 +155,17 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
+## Hak akses (versi 2.4.0-CBT)
+
+| | Admin / pengawas | Guru pemilik soal | Siswa |
+|---|---|---|---|
+| Bank soal milik guru | lihat di daftar saja (tidak bisa Edit/Hapus) | susun, ubah, hapus | — |
+| Mata pelajaran bank soal baru | semua | hanya mapel yang ditetapkan admin di akunnya | — |
+| Monitoring | status saja (tanpa nilai) | status saja (tanpa nilai) | — |
+| Hasil: nilai, skor, ringkasan & KKM, analisis soal, koreksi, hitung ulang | **tidak** (hanya daftar peserta & status) | ya | nilai sendiri bila "Tampilkan nilai" aktif |
+| Jadwal ujian yang terlihat | semua | jadwal yang memakai bank soalnya | **hanya hari ini** |
+| Excel data siswa/guru (kolom Password) | ya | — | — |
+
 ## Cara kerja saat ujian
 
 - **1 kali ujian = 1 permintaan per siswa.** Koneksi dibuka sekali (saat login/mulai) dan dipakai untuk login, daftar

@@ -245,7 +245,7 @@ p{margin:0}
       </div>
       <div class="err" v-if="err" style="margin-top:14px">{{ err }}</div>
       <div v-if="!daftar" class="kosong">Memuat…</div>
-      <div v-else-if="!daftar.length" class="kosong"><b>Belum ada ujian</b>Belum ada ujian yang dijadwalkan untuk kelas Anda dalam 7 hari ke depan.</div>
+      <div v-else-if="!daftar.length" class="kosong"><b>Tidak ada ujian hari ini</b>Belum ada ujian yang dijadwalkan untuk kelas Anda pada hari ini.</div>
       <div class="kartu" v-for="u in daftar" :key="u.id">
         <div class="info">
           <div class="mapel">{{ u.mapel }}</div>

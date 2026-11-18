@@ -207,7 +207,7 @@ ws3.close();
 await dev(61 * 60000 + 3 * 60000, true); // lewati durasi + toleransi, jalankan perawatan
 r = await call('monitorUjian', { ujianId: U.id }, ADM);
 let p3 = r.data.peserta.find(p => p.nis === '1002');
-ok('waktu habis tanpa kiriman perangkat → PENDING (tidak dinilai dari jawaban kosong)', p3.status === 'pending' && p3.nilai === null, p3);
+ok('waktu habis tanpa kiriman perangkat → PENDING (tidak dinilai dari jawaban kosong)', p3.status === 'pending' && p3.nilai === undefined, p3);
 const mp = await mon.tunggu(m => m.t === 'diff' && m.rows.some(x => x.nis === '1002' && x.status === 'pending'), 6000);
 ok('monitor menerima perubahan status Pending', !!mp);
 r = await call('hasilUjian', { ujianId: U.id }, ADM);
@@ -218,8 +218,10 @@ ok('kiriman dari percobaan lama ditolak (DIRESET)', !r.ok && r.code === 'DIRESET
 await dev(U.selesai - Date.now() + 2 * 3600000 + 5 * 60000, true);
 r = await call('monitorUjian', { ujianId: U.id }, ADM);
 p3 = r.data.peserta.find(p => p.nis === '1002');
-ok('pending lama → dinilai otomatis dari cadangan terakhir', p3.status === 'selesai' && p3.nilai > 0 && /otomatis/.test(p3.catatan), p3);
-const n0 = p3.nilai;
+ok('pending lama → dinilai otomatis dari cadangan terakhir', p3.status === 'selesai' && /otomatis/.test(p3.catatan), p3);
+const nilaiGuru = async nis => { const h = (await call('hasilUjian', { ujianId: U.id }, GURU)).data; const p = h.peserta.find(x => x.nis === nis); return p && p.hasil ? p.hasil.nilai : null; };
+const n0 = await nilaiGuru('1002');
+ok('nilai otomatis dari cadangan terakhir > 0 (dilihat guru pemilik soal)', n0 > 0, n0);
 r = await call('ujianSaya', {}, S3);
 ok('siswa: hasil otomatis masih menerima kiriman susulan', r.data.find(u => u.id === U.id).susulan === true, r.data);
 // perangkat tersambung lagi (mis. besok pagi) → jawaban lengkap dari perangkat menggantikan nilai otomatis

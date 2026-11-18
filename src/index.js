@@ -12,7 +12,7 @@
 import { Engine } from './engine.js';
 import {
   VERSI, TOKEN_GURU_JAM, TOKEN_SISWA_JAM, CONFIG_DEFAULT, AppError, errInfo, now, setOffset,
-  str_, cekPw_, signToken_, verifyToken_, reqSiswa_
+  str_, cekPw_, signToken_, verifyToken_, reqSiswa_, ujianHariIni_
 } from './shared.js';
 
 export { Engine };
@@ -114,7 +114,7 @@ const AKSI = {
     const me = reqSiswa_(await verifyToken_(tok, await secret(env)));
     const t = now();
     const list = (await daftarUjian(env))
-      .filter(u => u.aktif && (u.kelas || []).indexOf(me.k) >= 0 && u.selesai >= t - 3 * 86400000 && u.mulai <= t + 7 * 86400000)
+      .filter(u => u.aktif && (u.kelas || []).indexOf(me.k) >= 0 && ujianHariIni_(u, t))   // hanya jadwal hari ini
       .sort((a, b) => a.mulai - b.mulai);
     const hasil = {};
     if (list.length) {

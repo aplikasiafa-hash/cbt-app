@@ -4,13 +4,13 @@
  */
 import { makeCred_, bankContoh_, metaBank_, uid_ } from './shared.js';
 
-export const SKEMA_VERSI = '2';
+export const SKEMA_VERSI = '3';
 
 const SKEMA = [
   `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS guru (id TEXT PRIMARY KEY, username TEXT NOT NULL, data TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS guru_username ON guru(username)`,
-  `CREATE TABLE IF NOT EXISTS siswa (nis TEXT PRIMARY KEY, nama TEXT NOT NULL, kelas TEXT NOT NULL, salt TEXT, hash TEXT)`,
+  `CREATE TABLE IF NOT EXISTS siswa (nis TEXT PRIMARY KEY, nama TEXT NOT NULL, kelas TEXT NOT NULL, salt TEXT, hash TEXT, sandi TEXT)`,
   `CREATE INDEX IF NOT EXISTS siswa_kelas ON siswa(kelas)`,
   `CREATE TABLE IF NOT EXISTS bank (id TEXT PRIMARY KEY, meta TEXT NOT NULL, data TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ujian (id TEXT PRIMARY KEY, selesai INTEGER NOT NULL, data TEXT NOT NULL)`,
@@ -28,6 +28,8 @@ export async function siapkanD1(DB) {
   if (m.skema === SKEMA_VERSI && m.secret) return m.secret;
 
   await DB.batch(SKEMA.map(s => DB.prepare(s)));
+  // versi 3: kolom sandi (kata sandi dari admin, terenkripsi) untuk database lama
+  await DB.prepare(`ALTER TABLE siswa ADD COLUMN sandi TEXT`).run().catch(() => {});
   const secret = m.secret || (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '');
   const stmts = [DB.prepare(`INSERT OR IGNORE INTO kv (k, v) VALUES ('secret', ?)`).bind(secret)];
 

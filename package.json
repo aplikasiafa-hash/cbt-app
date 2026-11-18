@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev --var DEV_MODE:1",
     "deploy": "wrangler deploy",
-    "test": "node test/fungsional.test.mjs && node test/soket.test.mjs",
+    "test": "node test/fungsional.test.mjs && node test/soket.test.mjs && node test/aturan.test.mjs",
     "beban": "node test/beban-soket.mjs",
     "beban-lama": "node test/beban.mjs",
     "test-bangun": "bash test/bangun.sh"

@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.4.0-cloudflare';
+export const VERSI = '2.4.0-CBT';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -51,6 +51,46 @@ const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, 
 export async function hashPw_(pw, salt) {
   return hex(await crypto.subtle.digest('SHA-256', enc.encode(salt + '|' + pw)));
 }
+// ---- jadwal "hari ini" untuk siswa (zona WITA, UTC+8)
+export const ZONA_MS = 8 * 3600000;
+export function hariIni_(t) { const d = Math.floor((t + ZONA_MS) / 86400000); return [d * 86400000 - ZONA_MS, (d + 1) * 86400000 - ZONA_MS]; }
+export function ujianHariIni_(u, t) { const [a, b] = hariIni_(t); return u.mulai < b && u.selesai >= a; }
+
+// ---- kata sandi yang DIISI ADMIN disimpan terenkripsi (AES-GCM, kunci dari secret server) agar bisa diunduh di Excel.
+//      Kata sandi yang diganti sendiri oleh pemilik akun tidak disimpan (hanya hash).
+let kunciSandiP = null, kunciSandiS = '';
+function kunciSandi(secret) {
+  if (!kunciSandiP || kunciSandiS !== secret) {
+    kunciSandiS = secret;
+    kunciSandiP = crypto.subtle.digest('SHA-256', enc.encode('sandi|' + secret)).then(raw => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']));
+  }
+  return kunciSandiP;
+}
+export async function enkripSandi_(pw, secret) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await kunciSandi(secret), enc.encode(String(pw))));
+  const all = new Uint8Array(12 + ct.length); all.set(iv); all.set(ct, 12);
+  return 'v1:' + keB64(all);
+}
+export async function dekripSandi_(t, secret) {
+  try {
+    if (!t || !String(t).startsWith('v1:')) return null;
+    const all = dariB64(String(t).slice(3));
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12) }, await kunciSandi(secret), all.slice(12)));
+  } catch (e) { return null; }
+}
+/** Isi kolom password di Excel: sandi dari admin, atau sandi bawaan (NIS), atau keterangan. */
+export async function bacaSandi_(u, secret, bawaan, oleh) {
+  if (u.sandi === '-') return '(diganti sendiri oleh ' + oleh + ')';
+  if (u.sandi) {
+    const pw = await dekripSandi_(u.sandi, secret);
+    if (pw !== null) return (await cekPw_(u, pw)) ? pw : '(diganti sendiri oleh ' + oleh + ')';
+  }
+  if (bawaan && await cekPw_(u, bawaan)) return bawaan;
+  return '(tidak diketahui, isi ulang lewat Ubah)';
+}
+export const sandiDariExcel_ = v => { const t = String(v || '').trim(); return /^\(/.test(t) ? '' : t; };
+
 export async function makeCred_(pw) { const salt = uid_(''); return { salt, hash: await hashPw_(String(pw), salt) }; }
 export async function cekPw_(user, pw) { return !!(user && user.salt && user.hash === await hashPw_(String(pw), user.salt)); }
 

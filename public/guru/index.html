@@ -416,7 +416,7 @@ table.tbl{width:100%;border-collapse:collapse}
       <div><h1>Bank soal</h1><p>Kumpulan soal per mata pelajaran. Satu bank soal bisa dipakai di banyak jadwal ujian.</p></div>
       <div class="row">
         <button class="btn" @click="pilihImpor">Impor file JSON</button>
-        <button class="btn btn-primary" @click="baru={judul:'',mapel:S.user.mapel[0]||'',tingkat:S.config.tingkat[0]||''}">Buat bank soal</button>
+        <button class="btn btn-primary" @click="baru={judul:'',mapel:mapelPilihan()[0]||'',tingkat:S.config.tingkat[0]||''}">Buat bank soal</button>
       </div>
     </div>
     <div class="panel">
@@ -430,13 +430,15 @@ table.tbl{width:100%;border-collapse:collapse}
       <div v-else class="tbl-wrap"><table class="tbl">
         <thead><tr><th>Judul</th><th>Mapel</th><th>Tingkat</th><th class="num">Soal</th><th class="num">Bobot</th><th v-if="S.user.role==='admin'">Pemilik</th><th>Diubah</th><th></th></tr></thead>
         <tbody><tr v-for="b in tampil" :key="b.id">
-          <td><a :href="'#/editor/'+b.id"><b>{{ b.judul }}</b></a></td>
+          <td><a v-if="bisaUbah(b)" :href="'#/editor/'+b.id"><b>{{ b.judul }}</b></a><b v-else>{{ b.judul }}</b></td>
           <td>{{ b.mapel }}</td><td>{{ b.tingkat }}</td><td class="num">{{ b.jumlahSoal }}</td><td class="num">{{ b.totalBobot }}</td>
           <td v-if="S.user.role==='admin'">{{ b.guruNama }}</td>
           <td class="small muted">{{ relatif(b.diubah) }}</td>
           <td class="act">
-            <a class="btn btn-sm" :href="'#/editor/'+b.id">Edit</a>
-            <menu-pop :items="[{t:'Duplikat',f:()=>duplikat(b)},{t:'Unduh JSON',f:()=>unduhJson(b)},{t:'Hapus',f:()=>hapus(b),danger:true}]"></menu-pop>
+            <template v-if="bisaUbah(b)">
+              <a class="btn btn-sm" :href="'#/editor/'+b.id">Edit</a>
+              <menu-pop :items="[{t:'Duplikat',f:()=>duplikat(b)},{t:'Unduh JSON',f:()=>unduhJson(b)},{t:'Hapus',f:()=>hapus(b),danger:true}]"></menu-pop>
+            </template>
           </td>
         </tr></tbody>
       </table></div>
@@ -448,7 +450,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <div class="modal-body">
           <label class="field"><span>Judul</span><input v-model="baru.judul" required placeholder="Contoh: PAS Ganjil Matematika X" v-focus></label>
           <div class="grid2">
-            <label class="field"><span>Mata pelajaran</span><select v-model="baru.mapel"><option v-for="m in S.config.mapel" :key="m">{{ m }}</option></select></label>
+            <label class="field"><span>Mata pelajaran</span><select v-model="baru.mapel"><option v-for="m in mapelPilihan()" :key="m">{{ m }}</option></select></label>
             <label class="field"><span>Tingkat</span><select v-model="baru.tingkat"><option v-for="t in S.config.tingkat" :key="t">{{ t }}</option></select></label>
           </div>
         </div>
@@ -855,7 +857,7 @@ table.tbl{width:100%;border-collapse:collapse}
               <td class="small tnum">
                 <template v-if="p.status==='mengerjakan'">mulai {{ fmtJam(p.mulai) }} · batas {{ fmtJam(p.deadline) }}</template>
                 <template v-else-if="p.status==='pending'">waktu habis {{ fmtJam(p.deadline) }}</template>
-                <template v-else-if="p.status==='selesai'">{{ fmtJam(p.selesai) }}<span v-if="p.nilai!==null"> · nilai <b>{{ p.nilai }}</b></span></template>
+                <template v-else-if="p.status==='selesai'">selesai {{ fmtJam(p.selesai) }}</template>
               </td>
               <td class="act">
                 <menu-pop :items="aksi(p)" v-if="aksi(p).length"></menu-pop>
@@ -872,7 +874,7 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-hasil">
   <div class="page">
     <template v-if="!S.route.id">
-      <div class="page-head"><div><h1>Hasil & koreksi</h1><p>Pilih ujian untuk melihat nilai, menganalisis soal, dan mengoreksi jawaban uraian.</p></div></div>
+      <div class="page-head"><div><h1>Hasil & koreksi</h1><p v-if="S.user.role==='admin'">Pilih ujian untuk melihat daftar peserta. Nilai, analisis soal, dan koreksi hanya dapat dilihat guru pemilik soal.</p><p v-else>Pilih ujian untuk melihat nilai, menganalisis soal, dan mengoreksi jawaban uraian.</p></div></div>
       <pilih-ujian tujuan="hasil"></pilih-ujian>
     </template>
     <template v-else>
@@ -881,19 +883,19 @@ table.tbl{width:100%;border-collapse:collapse}
         <div class="page-head">
           <div><a href="#/hasil" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ d.bank ? d.bank.judul : '' }} · {{ fmtTgl(d.ujian.mulai) }}</p></div>
           <div class="row">
-            <button class="btn" @click="hitungUlang" title="Pakai kunci jawaban terbaru di bank soal">Hitung ulang nilai</button>
+            <button class="btn" @click="hitungUlang" title="Pakai kunci jawaban terbaru di bank soal" v-if="lihatNilai">Hitung ulang nilai</button>
             <button class="btn" @click="sinkron" title="Simpan semua hasil terbaru ke database (dan cadangan GitHub bila diatur)">Simpan sekarang</button>
-            <button class="btn btn-primary" @click="unduh" :disabled="!selesai.length">Unduh Excel</button>
+            <button class="btn btn-primary" @click="unduh" :disabled="lihatNilai ? !selesai.length : !d.peserta.length">Unduh Excel</button>
           </div>
         </div>
-        <div class="tabs">
+        <div class="tabs" v-if="lihatNilai">
           <button :class="{on:tab==='nilai'}" @click="tab='nilai'">Nilai</button>
           <button :class="{on:tab==='analisis'}" @click="tab='analisis'" :disabled="!selesai.length">Analisis soal</button>
           <button :class="{on:tab==='koreksi'}" @click="tab='koreksi'" v-if="soalUraian.length">Koreksi uraian <span class="chip chip-kuning" v-if="jmlPerluKoreksi" style="margin-left:4px">{{ jmlPerluKoreksi }}</span></button>
         </div>
 
         <template v-if="tab==='nilai'">
-          <div class="panel panel-pad" style="margin-bottom:16px">
+          <div class="panel panel-pad" style="margin-bottom:16px" v-if="lihatNilai">
             <p class="lede" v-if="selesai.length"><b>{{ selesai.length }}</b> dari {{ d.peserta.length }} peserta selesai. Rata-rata <b>{{ statistik.rata }}</b>, tertinggi <b>{{ statistik.maks }}</b>, terendah <b>{{ statistik.min }}</b>.
               <template v-if="kkm"> <b>{{ statistik.tuntas }}</b> siswa mencapai KKM {{ kkm }}.</template>
               <template v-if="jmlPerluKoreksi"> <b>{{ jmlPerluKoreksi }}</b> peserta masih menunggu koreksi uraian, nilainya belum final.</template></p>
@@ -906,20 +908,22 @@ table.tbl{width:100%;border-collapse:collapse}
               <select class="input" v-model="fKelas"><option value="">Semua kelas</option><option v-for="k in d.ujian.kelas" :key="k">{{ k }}</option></select>
             </div>
             <div class="tbl-wrap"><table class="tbl">
-              <thead><tr><th>No</th><th class="sortable" @click="urut('nis')">NIS</th><th class="sortable" @click="urut('nama')">Nama</th><th class="sortable" @click="urut('kelas')">Kelas</th><th class="num sortable" @click="urut('nilai')">Nilai</th><th class="num">Skor</th><th class="num">Benar</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>No</th><th class="sortable" @click="urut('nis')">NIS</th><th class="sortable" @click="urut('nama')">Nama</th><th class="sortable" @click="urut('kelas')">Kelas</th><template v-if="lihatNilai"><th class="num sortable" @click="urut('nilai')">Nilai</th><th class="num">Skor</th><th class="num">Benar</th></template><th>Status</th><th></th></tr></thead>
               <tbody><tr v-for="(p,i) in tampil" :key="p.nis">
                 <td class="tnum muted">{{ i+1 }}</td><td class="tnum">{{ p.nis }}</td><td><b>{{ p.nama }}</b></td><td>{{ p.kelas }}</td>
+                <template v-if="lihatNilai">
                 <td class="num"><span class="nilai-big" v-if="p.hasil" :style="{color: kkm && p.hasil.nilai < kkm ? 'var(--merah)' : ''}">{{ p.hasil.nilai }}</span><span v-else class="muted">—</span></td>
                 <td class="num small">{{ p.hasil ? p.hasil.skor + '/' + p.hasil.maks : '' }}</td>
                 <td class="num small">{{ p.hasil ? p.hasil.benar + '/' + p.hasil.jumlahSoal : '' }}</td>
+                </template>
                 <td><status-peserta :s="p.status"></status-peserta> <span class="chip chip-kuning" v-if="p.hasil && p.hasil.perluKoreksi">perlu koreksi</span></td>
-                <td class="act"><button class="btn btn-sm" v-if="p.status==='selesai'" @click="detail=p">Detail</button></td>
+                <td class="act"><button class="btn btn-sm" v-if="lihatNilai && p.status==='selesai'" @click="detail=p">Detail</button></td>
               </tr></tbody>
             </table></div>
           </div>
         </template>
 
-        <template v-if="tab==='analisis'">
+        <template v-if="lihatNilai && tab==='analisis'">
           <div class="panel panel-pad" style="margin-bottom:16px"><p class="muted small" style="max-width:80ch">Tingkat kesukaran (P) = rata-rata skor ÷ bobot: di atas 0,70 mudah, 0,30–0,70 sedang, di bawah 0,30 sukar. Daya pembeda (D) membandingkan 27% siswa nilai tertinggi dengan 27% terendah: 0,40 ke atas sangat baik, 0,30 baik, 0,20 cukup, di bawah 0,20 perlu direvisi. Analisis lebih bermakna jika peserta minimal 20 orang.</p></div>
           <div class="panel"><div class="tbl-wrap"><table class="tbl">
             <thead><tr><th>No</th><th>Soal</th><th>Jenis</th><th class="num">Skor penuh</th><th class="num">P</th><th>Kesukaran</th><th class="num">D</th><th>Pembeda</th><th>Sebaran jawaban</th></tr></thead>
@@ -935,7 +939,7 @@ table.tbl{width:100%;border-collapse:collapse}
           </table></div></div>
         </template>
 
-        <template v-if="tab==='koreksi'">
+        <template v-if="lihatNilai && tab==='koreksi'">
           <div class="panel panel-pad" style="margin-bottom:16px">
             <div class="row">
               <label class="field" style="margin:0;min-width:300px"><span>Soal uraian</span>
@@ -1089,7 +1093,10 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-guru">
   <div class="page">
     <div class="page-head"><div><h1>Data guru</h1><p>Akun guru untuk menyusun bank soal. Admin bisa mengelola semua data dan jadwal.</p></div>
-      <button class="btn btn-primary" @click="f={username:'',nama:'',role:'guru',aktif:true,password:'',mapel:[]}">Tambah guru</button></div>
+      <div class="row">
+        <button class="btn" @click="unduh" :disabled="!list || !list.length">Unduh Excel</button>
+        <button class="btn btn-primary" @click="f={username:'',nama:'',role:'guru',aktif:true,password:'',mapel:[]}">Tambah guru</button>
+      </div></div>
     <div class="panel">
       <div v-if="!list" class="loading">Memuat…</div>
       <div v-else class="tbl-wrap"><table class="tbl">
@@ -1154,11 +1161,6 @@ table.tbl{width:100%;border-collapse:collapse}
       <h3 style="margin-bottom:4px">Sistem & cadangan</h3>
       <p class="muted small" style="margin-bottom:12px;max-width:75ch">Server: Cloudflare (paket gratis). Jawaban siswa tersimpan di perangkat, dikirim ke server lewat koneksi langsung, dan hasil akhir disimpan di database Cloudflare D1. Bila repo GitHub data diatur, soal dan hasil dicadangkan otomatis maksimal tiap 30 menit.</p>
       <table class="tbl" v-if="st" style="max-width:560px;margin-bottom:14px"><tbody>
-        <tr><td>Siswa sedang mengerjakan</td><td class="tnum"><b>{{ st.mengerjakan }}</b> ({{ st.siswaOnline }} tersambung langsung)</td></tr>
-        <tr><td>Monitor terbuka</td><td class="tnum">{{ st.monitor }}</td></tr>
-        <tr><td>Repo gambar (MEDIA_REPO)</td><td>{{ st.mediaRepo || '— belum diatur (unggah gambar tidak bisa)' }}</td></tr>
-        <tr><td>Repo cadangan (DATA_REPO)</td><td>{{ st.dataRepo || '— tidak dipakai' }}</td></tr>
-        <tr><td>Token GitHub</td><td>{{ st.adaToken ? 'terpasang' : '— belum diatur' }}</td></tr>
         <tr v-if="st.dataRepo"><td>Cadangan terakhir</td><td>{{ st.cadanganTerakhir ? fmtWaktu(st.cadanganTerakhir) : 'belum pernah' }}<span v-if="st.antrianCadangan" class="muted"> · {{ st.antrianCadangan }} menunggu</span></td></tr>
         <tr v-if="st.ukuranDb"><td>Ukuran database</td><td :style="st.ukuranDb > st.batasDb * 0.8 ? 'color:var(--merah,#c0392b)' : ''">{{ (st.ukuranDb / 1048576).toFixed(1) }} MB dari {{ Math.round(st.batasDb / 1048576) }} MB ({{ (st.ukuranDb / st.batasDb * 100).toFixed(1) }}%)<span v-if="st.ukuranDb > st.batasDb * 0.8" class="small"><br>Hampir penuh: unduh Excel hasil ujian lama, lalu hapus jadwal tersebut beserta hasilnya (menu Jadwal ujian).</span></td></tr>
         <tr v-if="st.cadanganGagal"><td>Cadangan gagal</td><td style="color:var(--merah,#c0392b)">{{ fmtWaktu(st.cadanganGagal.t) }} — {{ st.cadanganGagal.pesan }}<br><span class="muted small">Periksa token GitHub (lihat PASANG-TOKEN-GITHUB.md), lalu tekan tombol di bawah.</span></td></tr>
@@ -1168,7 +1170,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <button class="btn" @click="impor" :disabled="sibukSync" v-if="st && st.dataRepo">Impor data dari GitHub…</button>
         <button class="btn" @click="muatUlangData" :disabled="sibukSync" title="Hanya perlu bila data di D1 diubah di luar aplikasi">Muat ulang data dari database</button>
       </div>
-      <p class="small muted" style="margin-top:12px">Backend: <span class="tnum">{{ API_URL }}</span><span v-if="versi"> · versi {{ versi }}</span></p>
+      <p class="small muted" style="margin-top:12px" v-if="versi">Versi {{ versi }}</p>
     </div>
   </div>
 </script>
@@ -1403,6 +1405,14 @@ function keluar(kadaluarsa) {
   if (kadaluarsa === true) toast('Sesi berakhir, silakan masuk lagi', 'err');
 }
 
+/* ---------- mata pelajaran yang boleh dipilih: guru = mapel yang ditetapkan admin di akunnya ---------- */
+function mapelPilihan() {
+  const m = S.user && S.user.role !== 'admin' && S.user.mapel && S.user.mapel.length ? S.user.mapel : (S.config.mapel || []);
+  return m.length ? m : (S.config.mapel || []);
+}
+async function segarkanProfil() {
+  try { const p = await api('profilSaya'); if (p && S.user) { S.user = { ...S.user, mapel: p.mapel || [] }; localStorage.setItem('cbt_g_user', JSON.stringify(S.user)); } } catch (e) {}
+}
 /* ---------- gambar ---------- */
 function bacaDataURL(file) { return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(file); }); }
 async function kompres(file) {
@@ -1559,7 +1569,7 @@ const app = createApp({
 });
 
 const G = app.config.globalProperties;
-Object.assign(G, { S, fmt, polos, huruf, fmtTgl, fmtJam, fmtJamDetik, fmtWaktu, relatif, namaTipe, singkatTipe, TIPE, LABEL_BS, rid, API_URL: new URL(API_URL, location.href).href });
+Object.assign(G, { S, fmt, polos, huruf, fmtTgl, fmtJam, fmtJamDetik, fmtWaktu, relatif, namaTipe, singkatTipe, TIPE, LABEL_BS, rid, mapelPilihan, API_URL: new URL(API_URL, location.href).href });
 app.directive('math', { mounted: el => renderMath(el), updated: el => renderMath(el) });
 app.directive('focus', { mounted: el => setTimeout(() => el.focus(), 30) });
 
@@ -1626,9 +1636,10 @@ app.component('v-bank', {
         .sort((a, b) => (b.diubah || 0) - (a.diubah || 0));
     }
   },
-  mounted() { this.muat(); },
+  mounted() { this.muat(); if (S.user.role !== 'admin') segarkanProfil(); },
   methods: {
     async muat() { try { this.list = await api('listBank'); } catch (e) { toast(e.message, 'err'); this.list = []; } },
+    bisaUbah(b) { return !b.guruId || b.guruId === S.user.id; },   // admin tidak bisa mengubah bank soal milik guru
     async buat() {
       this.sibuk = true;
       try { const r = await api('saveBank', { bank: { ...this.baru, soal: [] } }); location.hash = '#/editor/' + r.bank.id; }
@@ -1724,7 +1735,7 @@ app.component('v-editor', {
   data: () => ({ bank: null, sel: 0, kotor: false, menyimpan: false, tersimpan: 0, pratinjau: false, coba: {}, dipakai: [], impor: { buka: false, teks: '' } }),
   computed: {
     totalBobot() { return this.bank.soal.reduce((a, s) => a + (Number(s.bobot) || 0), 0); },
-    mapelOpsi() { return [...new Set([...(S.config.mapel || []), this.bank.mapel])].filter(Boolean); },
+    mapelOpsi() { return [...new Set([...mapelPilihan(), this.bank.mapel])].filter(Boolean); },
     hasilImpor() { return parseImporCepat(this.impor.teks); },
     soalPratinjau() { return untukSiswa(this.bank.soal[this.sel]); },
     ringkasImpor() { const c = {}; this.hasilImpor.forEach(s => c[s.tipe] = (c[s.tipe] || 0) + 1); return Object.entries(c).map(([k, v]) => v + ' ' + namaTipe(k).toLowerCase()).join(', '); }
@@ -1736,6 +1747,7 @@ app.component('v-editor', {
     window.addEventListener('beforeunload', this.sebelumTutup);
     try {
       const b = await api('getBank', { id: S.route.id });
+      if (b.guruId && b.guruId !== S.user.id) { toast('Bank soal milik ' + (b.guruNama || 'guru') + ' tidak bisa diubah oleh admin.', 'err', 5000); location.hash = '#/bank'; return; }
       b.soal = b.soal.map(normalisasiSoal);
       const draf = JSON.parse(localStorage.getItem('cbt_draf_' + b.id) || 'null');
       if (draf && draf.waktu > (b.diubah || 0) && JSON.stringify(draf.bank.soal) !== JSON.stringify(b.soal)) {
@@ -1940,6 +1952,7 @@ app.component('v-hasil', {
   template: '#t-hasil',
   data: () => ({ d: null, tab: 'nilai', q: '', fKelas: '', sortK: 'nilai', sortD: -1, detail: null, dInput: {}, kSoal: '', kBelum: true, kInput: {}, sibuk: false, kkm: Number(localStorage.getItem('cbt_kkm') || 75) }),
   computed: {
+    lihatNilai() { return !!this.d && this.d.lihatNilai !== false; },   // hanya guru pemilik soal
     selesai() { return this.d.peserta.filter(p => p.status === 'selesai' && p.hasil); },
     statistik() {
       const n = this.selesai.map(p => p.hasil.nilai); if (!n.length) return {};
@@ -2018,6 +2031,15 @@ app.component('v-hasil', {
     },
     async sinkron() { try { const r = await api('sinkronSekarang'); toast(pesanSinkron(r)); this.muat(); } catch (e) { toast(e.message, 'err'); } },
     async unduh() {
+      if (!this.lihatNilai) {   // admin & pengawas: daftar hadir peserta tanpa nilai
+        try {
+          const X = await muatXLSX(), wb = X.utils.book_new();
+          const rows = this.tampil.map((p, i) => ({ No: i + 1, NIS: p.nis, Nama: p.nama, Kelas: p.kelas, Status: ({ belum: 'Belum mulai', mengerjakan: 'Mengerjakan', pending: 'Pending', selesai: 'Selesai', direset: 'Direset' })[p.status] || p.status, Mulai: p.mulai ? new Date(p.mulai).toLocaleString('id-ID') : '', Selesai: p.selesai ? new Date(p.selesai).toLocaleString('id-ID') : '', 'Keluar halaman': p.pelanggaran || 0, Catatan: p.catatan || '' }));
+          X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), 'Peserta');
+          X.writeFile(wb, 'Peserta_' + namaFile(this.d.ujian.nama) + '.xlsx');
+        } catch (e) { toast(e.message, 'err'); }
+        return;
+      }
       try {
         const X = await muatXLSX(), soal = this.d.bank.soal;
         const rows = this.tampil.map((p, i) => ({ No: i + 1, NIS: p.nis, Nama: p.nama, Kelas: p.kelas, Nilai: p.hasil ? p.hasil.nilai : '', Skor: p.hasil ? p.hasil.skor : '', 'Skor maks': p.hasil ? p.hasil.maks : '', Benar: p.hasil ? p.hasil.benar : '', Status: p.status, 'Perlu koreksi': p.hasil && p.hasil.perluKoreksi ? 'ya' : '', Mulai: p.mulai ? new Date(p.mulai).toLocaleString('id-ID') : '', Selesai: p.selesai ? new Date(p.selesai).toLocaleString('id-ID') : '', 'Keluar halaman': p.pelanggaran || 0, Catatan: p.catatan || '' }));
@@ -2086,19 +2108,24 @@ app.component('v-siswa', {
       } catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
     },
     async unduh() {
-      try { const X = await muatXLSX(); const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(this.tampil.map(s => ({ NIS: s.nis, Nama: s.nama, Kelas: s.kelas }))), 'Siswa'); X.writeFile(wb, 'Data_siswa' + (this.fKelas ? '_' + namaFile(this.fKelas) : '') + '.xlsx'); }
+      // kolom D = Password: isian admin; kosong saat ditambah → sama dengan NIS
+      try { const [X, sandi] = await Promise.all([muatXLSX(), api('sandiSiswa')]); const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(this.tampil.map(s => ({ NIS: s.nis, Nama: s.nama, Kelas: s.kelas, Password: sandi[s.nis] ?? s.nis }))), 'Siswa'); X.writeFile(wb, 'Data_siswa' + (this.fKelas ? '_' + namaFile(this.fKelas) : '') + '.xlsx'); }
       catch (e) { toast(e.message, 'err'); }
     },
-    kartu() {
+    async kartu() {
       const daftar = this.tampil, w = window.open('', '_blank');
       if (!w) return toast('Izinkan pop-up untuk mencetak kartu', 'err');
+      w.document.write('<p style="font-family:Arial">Menyiapkan kartu…</p>');
+      let sandi = {};
+      try { sandi = await api('sandiSiswa'); } catch (e) { w.close(); return toast(e.message, 'err'); }
+      w.document.open();
       const sek = esc(S.config.namaSekolah), url = esc(location.href.replace(/\/guru\/?.*$/, '/siswa/'));
       w.document.write(`<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><title>Kartu login CBT</title><style>
         body{font-family:Arial,sans-serif;margin:12mm;color:#222}.g{display:grid;grid-template-columns:1fr 1fr;gap:6mm}
         .k{border:1.4px solid #D23F68;border-radius:3mm;padding:4mm 5mm;break-inside:avoid;font-size:11pt}
         .k h4{margin:0 0 2mm;font-size:11pt}.k p{margin:1mm 0}.k small{color:#666;font-size:8.5pt}
         .k b{font-family:Consolas,monospace;font-size:12pt}@media print{body{margin:8mm}}</style></head><body>
-        <div class="g">${daftar.map(s => `<div class="k"><h4>Kartu login CBT — ${sek}</h4><p>Nama: <strong>${esc(s.nama)}</strong></p><p>Kelas: ${esc(s.kelas)}</p><p>NIS: <b>${esc(s.nis)}</b></p><p>Kata sandi awal: <b>${esc(s.nis)}</b></p><small>Alamat ujian: ${url}</small></div>`).join('')}</div>
+        <div class="g">${daftar.map(s => `<div class="k"><h4>Kartu login CBT — ${sek}</h4><p>Nama: <strong>${esc(s.nama)}</strong></p><p>Kelas: ${esc(s.kelas)}</p><p>NIS: <b>${esc(s.nis)}</b></p><p>Kata sandi: <b>${esc(sandi[s.nis] ?? s.nis)}</b></p><small>Alamat ujian: ${url}</small></div>`).join('')}</div>
         <script>window.onload=()=>window.print()<\/script></body></html>`);
       w.document.close();
     }
@@ -2110,6 +2137,14 @@ app.component('v-guru', {
   mounted() { this.muat(); },
   methods: {
     async muat() { try { this.list = await api('listGuru'); } catch (e) { toast(e.message, 'err'); this.list = []; } },
+    async unduh() {
+      try {
+        const [X, sandi] = await Promise.all([muatXLSX(), api('sandiGuru')]), wb = X.utils.book_new();
+        const rows = this.list.map(g => ({ 'Nama pengguna': g.username, 'Nama': g.nama, 'Mata pelajaran': (g.mapel || []).join(', '), 'Password': sandi[g.id] || '', 'Peran': g.role === 'admin' ? 'Admin' : 'Guru', 'Status': g.aktif ? 'Aktif' : 'Nonaktif' }));
+        X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), 'Guru');
+        X.writeFile(wb, 'Data_guru.xlsx');
+      } catch (e) { toast(e.message, 'err'); }
+    },
     async simpan() {
       this.sibuk = true;
       try { await api('saveGuru', this.f); toast('Akun guru tersimpan'); this.f = null; this.muat(); }
