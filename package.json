@@ -10,12 +10,9 @@
     "test-gabung": "node test/gabung.test.mjs",
     "beban": "node test/beban-soket.mjs",
     "beban-lama": "node test/beban.mjs",
-    "test-bangun": "bash test/bangun.sh",
-    "bina": "node bina.mjs"
+    "test-bangun": "bash test/bangun.sh"
   },
   "devDependencies": {
-    "wrangler": "^4.162.0",
-    "javascript-obfuscator": "^4.1.1",
-    "html-minifier-terser": "^7.2.0"
+    "wrangler": "^4.162.0"
   }
 }
