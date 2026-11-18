@@ -155,25 +155,44 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
-## Hak akses (versi 2.5.0-CBT)
+## Hak akses (versi 2.6.0-CBT)
 
 | | Admin | Guru pengawas | Guru pemilik soal | Siswa |
 |---|---|---|---|---|
 | Bank soal milik guru | lihat di daftar saja (tidak bisa Edit/Hapus) | — | susun, ubah, hapus | — |
 | Mata pelajaran bank soal baru | semua | — | hanya mapel yang ditetapkan admin di akunnya | — |
 | Jadwal ujian yang terlihat | semua (atur jadwal, kelas, **pengawas**) | **hanya hari ini**: Ujian, Kelas, Waktu, Durasi, Pengawas | sama dengan pengawas | **hanya hari ini** |
-| Monitoring | semua ujian, semua kelas | **hanya ujian yang ia awasi, hanya kelas yang ia awasi** (bukan berdasarkan mapel) | hanya bila ia juga ditetapkan sebagai pengawas | — |
+| Monitoring (daftar) | **hanya ujian yang sedang berlangsung**, semua kelas (ujian lain lewat Jadwal → Pantau) | **hanya ujian berlangsung yang ia awasi, hanya kelas yang ia awasi** | hanya bila ia juga pengawas | — |
 | Token ujian | lihat & ganti | lihat & ganti (ujian yang ia awasi) | — | — |
 | Hasil: nilai, skor, ringkasan & KKM, analisis soal, koreksi, hitung ulang | **tidak** (hanya daftar peserta & status) | — | ya | nilai sendiri bila "Tampilkan nilai" aktif |
-| Excel data siswa/guru (kolom Password), impor siswa & guru | ya | — | — | — |
+| Excel & impor: data siswa, data guru, **pengaturan** | ya | — | — | — |
 
-**Menetapkan pengawas:** Jadwal ujian → Buat/Ubah jadwal → *Nama pengawas*: ketik nama guru lalu Enter (atau pilih
-dari daftar). Bila kelas peserta lebih dari satu, tandai kelas yang diawasi tiap pengawas; *Semua kelas* = mengawasi
-seluruh kelas peserta. Pengawas hanya melihat dan menindak (reset login, kumpulkan) siswa di kelasnya.
+**Menetapkan pengawas:** Jadwal ujian → Buat/Ubah jadwal → pilih *Bank soal* (Nama ujian terisi otomatis dari judul
+bank soal guru, bisa diubah) → *Nama pengawas*: ketik nama guru lalu Enter (atau pilih dari daftar). Bila kelas peserta
+lebih dari satu, tandai kelas yang diawasi tiap pengawas. Daftar pilihan **tidak memuat akun admin** dan **tidak memuat
+guru yang sudah mengawasi ujian bermapel sama di tingkat lain** (ujian yang belum berakhir) — misalnya pengawas
+Kimia X tidak ditawarkan untuk Kimia XI.
 
 **Impor guru:** Data guru → *Impor* → file Excel dengan kolom *Nama pengguna, Nama, Mata pelajaran, Password, Peran,
-Status* (sama dengan hasil *Unduh Excel*). Dicocokkan lewat nama pengguna. Guru baru tanpa password → password sama
-dengan nama pengguna. Guru yang sudah ada: sel kosong = tidak diubah.
+Status* (sama dengan hasil *Unduh Excel*). Guru baru tanpa password → password sama dengan nama pengguna.
+
+**Impor pengaturan:** Pengaturan → *Unduh Excel* (lembar Identitas, Tingkat, Kelas, Mata pelajaran) → ubah di Excel →
+*Impor* → pilih *Tambahkan* atau *Ganti* → *Impor & simpan*.
+
+## serverB (cadangan) dan serverC (server utama)
+
+Di aplikasi, Cloudflare disebut **serverC** dan GitHub disebut **serverB**; nama layanan dan kata "D1" tidak tampil di
+layar. (Alamat aplikasi `…workers.dev` dan alamat gambar soal tetap terlihat oleh orang yang memeriksa alamat/kode
+halaman; pakai domain sendiri bila perlu menyamarkannya.)
+
+- Data dikirim ke serverB **hanya bila ada perubahan**, ±2 menit setelah perubahan terakhir. Selama ada siswa yang
+  sedang mengerjakan, pengiriman ditunda sampai ujian selesai. Tidak ada perubahan = tidak ada pengiriman.
+- **Data hari-hari sebelumnya dibaca dari serverB** (0 baris D1): daftar Data siswa, Excel & kartu login siswa, daftar
+  peserta monitor, hasil & nilai ujian yang sudah lewat, koreksi ujian lama.
+- **Data hari ini dibaca dari serverC (D1)**: bila data siswa diubah hari ini, atau hasil ujian lama dikoreksi hari ini,
+  data dibaca dari D1 sampai salinannya terkirim lagi ke serverB dan hari berganti.
+- Salinan dibaca pada commit yang tercatat (tidak berubah), jadi isinya pasti sama dengan D1 saat dikirim. Bila serverB
+  tidak bisa dihubungi, aplikasi otomatis membaca dari D1.
 
 ## Cara kerja saat ujian
 

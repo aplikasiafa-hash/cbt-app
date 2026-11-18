@@ -14,7 +14,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as X from './shared.js';
 import { siapkanD1, potong, SKEMA_VERSI } from './db.js';
-import { unggahGambar, cekRepoData, commitFiles, unduhRepo } from './github.js';
+import { unggahGambar, cekRepoData, commitFiles, unduhRepo, bacaBerkas } from './github.js';
 
 const { AppError, now, str_, num_, bool_, parse_, uid_, GRACE_MS } = X;
 
@@ -23,7 +23,8 @@ const JW_FLUSH_MS = 120000;    // cadangkan jawaban sementara tiap 2 menit
 const DENYUT_MS = 4000;        // dorong perubahan status ke monitor tiap 4 detik
 const PENDING_MS = 2 * 3600000; // jawaban perangkat tak kunjung datang: dinilai dari cadangan server 2 jam setelah jadwal ditutup
 const ALARM_MS = 60000;        // perawatan saat tidak ada koneksi
-const BACKUP_MS = 30 * 60000;  // cadangan GitHub otomatis maks. tiap 30 menit
+const JEDA_CADANGAN_MS = 2 * 60000;   // serverB: dikirim ±2 menit setelah perubahan terakhir (hanya bila ada perubahan)
+const GAGAL_TUNDA_MS = 3600000;        // kiriman gagal (mis. token salah) dicoba lagi 1 jam kemudian
 // Salinan data guru/bank/jadwal/pengaturan di penyimpanan internal Durable Object: saat mesin ujian bangun dari tidur
 // tidak perlu membaca D1 (hemat "Rows read"). Dimuat ulang dari D1 sekali setiap versi aplikasi baru.
 const CACHE_VERSI = 'c1:' + X.VERSI + ':' + SKEMA_VERSI;   // versi/skema baru → siapkan D1 (migrasi) & muat ulang sekali
@@ -133,8 +134,12 @@ export class Engine extends DurableObject {
     if (this.metaGet('c_versi') === CACHE_VERSI && this.metaGet('c_secret')) this.muatDariDO();
     else { this.secret = await siapkanD1(this.env.DB); await this.muatCache(); }
     this.bdirty = new Set(parse_(this.metaGet('bdirty'), []));
+    this.bver = new Map(); this.bubah = 0;
     this.lastBackup = Number(this.metaGet('lastBackup') || 0);
     this.cadanganGagal = parse_(this.metaGet('cadanganGagal'), null);
+    this.ghHasil = parse_(this.metaGet('ghHasil'), {}) || {};
+    // salinan siswa di serverB belum ada (versi sebelumnya / baru diatur) → kirim sekali agar bisa dipakai besok
+    if (this.ghSiap() && !this.metaGet('ghSiswa')) this.tandaiCadangan('siswa');
     const ids = [...this.sql.exec(`SELECT DISTINCT u FROM p UNION SELECT DISTINCT u FROM jw`)].map(r => r.u);
     for (const id of ids) await this.getL(id);
     this.alarmAt = (await this.ctx.storage.getAlarm()) || 0;
@@ -224,11 +229,14 @@ export class Engine extends DurableObject {
   }
   pasangAlarm() { return this.aturAlarm(); }
   adaPeserta() { for (const L of this.L.values()) for (const P of L.P.values()) if (P.status === 'mengerjakan') return true; return false; }
+  /** Kapan data dikirim ke serverB: hanya bila ada perubahan, ±2 menit setelah perubahan terakhir.
+   *  Ditunda selama ada siswa yang sedang mengerjakan (dikirim setelah ujian selesai). 0 = tidak perlu. */
   waktuCadangan() {
-    if (!this.env.DATA_REPO || !this.env.GITHUB_TOKEN || !this.bdirty || !this.bdirty.size) return 0;
-    if (this.adaPeserta()) return 0;   // ditunda selama ujian berjalan (alarm perawatan ujian tetap jalan)
-    let at = this.lastBackup + BACKUP_MS;
-    if (this.cadanganGagal) at = Math.max(at, this.cadanganGagal.t + 6 * 3600000);
+    if (!this.ghSiap() || !this.bdirty || !this.bdirty.size) return 0;
+    if (this.adaPeserta()) return 0;
+    const jeda = Number(this.env.JEDA_CADANGAN_DETIK) > 0 ? Number(this.env.JEDA_CADANGAN_DETIK) * 1000 : JEDA_CADANGAN_MS;
+    let at = Math.max((this.bubah || 0) + jeda, this.lastBackup + Math.min(60000, jeda));
+    if (this.cadanganGagal) at = Math.max(at, this.cadanganGagal.t + GAGAL_TUNDA_MS);
     return at;
   }
   adaKerja() {
@@ -246,7 +254,8 @@ export class Engine extends DurableObject {
   ringkas(u) {
     const r = X.ringkasUjian_(u); const b = this.bankIdx.get(u.bankId); if (b) r.jumlahSoal = b.jumlahSoal;
     // nama pengawas diambil dari data guru terbaru (bila guru mengganti nama, jadwal ikut berubah)
-    r.pengawas = (u.pengawas || []).map(p => { const g = this.guru.get(p.id); return { id: p.id, nama: g ? g.nama : (p.nama || '(akun dihapus)'), kelas: p.kelas || [] }; });
+    r.pengawas = (u.pengawas || []).map(p => ({ p, g: this.guru.get(p.id) })).filter(x => !x.g || x.g.role !== 'admin')
+      .map(({ p, g }) => ({ id: p.id, nama: g ? g.nama : (p.nama || '(akun dihapus)'), kelas: p.kelas || [] }));
     return r;
   }
   /** Ringkasan untuk guru: tandai kelas yang ia awasi & apakah ia pemilik soal. Token hanya untuk pengawasnya. */
@@ -317,17 +326,13 @@ export class Engine extends DurableObject {
       }
     }
     // cocokkan dengan hasil di D1 (yang sudah tersimpan / sudah dikoreksi guru)
-    const r = await this.env.DB.prepare(`SELECT nis, ver, data FROM hasil WHERE ujian_id = ?`).bind(id).all();
     const diD1 = new Set();
-    for (const row of r.results) {
-      diD1.add(row.nis);
-      const P = L.P.get(row.nis);
-      if (!P) { L.P.set(row.nis, dariRekam(await X.bukaData(row.data))); continue; }
-      if (row.ver === P.ver) P.syncVer = P.ver;
-      else if (row.ver > P.ver && P.status === 'selesai') {
-        const rec = await X.bukaData(row.data);
-        Object.assign(P, { hasil: rec.hasil, manual: rec.manual || {}, catatan: rec.catatan, ver: row.ver, syncVer: row.ver });
-      }
+    for (const rec of await this.hasilSemua(id)) {
+      diD1.add(rec.nis);
+      const P = L.P.get(rec.nis);
+      if (!P) { L.P.set(rec.nis, dariRekam(rec)); continue; }
+      if (rec.ver === P.ver) P.syncVer = P.ver;
+      else if (rec.ver > P.ver && P.status === 'selesai') Object.assign(P, { hasil: rec.hasil, manual: rec.manual || {}, catatan: rec.catatan, ver: rec.ver, syncVer: rec.ver });
     }
     for (const P of L.P.values()) {
       if (P.syncVer === undefined && (P.status === 'direset' || P.status === 'belum' || P.status === 'mengerjakan') && !diD1.has(P.nis)) P.syncVer = P.ver;
@@ -346,11 +351,13 @@ export class Engine extends DurableObject {
     const ada = !p && [...this.sql.exec(`SELECT d FROM c_roster WHERE id = ?`, kunci)][0];
     if (ada) { p = Promise.resolve(new Map(JSON.parse(ada.d).map(s => [String(s.nis), s]))); c.set(kunci, p); }
     if (!p) {
-      const gen = this.rosterGen || 0;
-      p = this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa WHERE kelas IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(kelas)).all()
-        .then(r => {
-          if ((this.rosterGen || 0) === gen) this.sql.exec(`INSERT OR REPLACE INTO c_roster (id, d) VALUES (?, ?)`, kunci, JSON.stringify(r.results));
-          return new Map(r.results.map(s => [String(s.nis), s]));
+      const gen = this.rosterGen || 0, ks = new Set(kelas);
+      p = this.siswaGH()
+        .then(gh => gh ? gh.filter(s => ks.has(s.kelas)).map(s => ({ nis: s.nis, nama: s.nama, kelas: s.kelas }))
+          : this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa WHERE kelas IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(kelas)).all().then(r => r.results))
+        .then(rows => {
+          if ((this.rosterGen || 0) === gen) this.sql.exec(`INSERT OR REPLACE INTO c_roster (id, d) VALUES (?, ?)`, kunci, JSON.stringify(rows));
+          return new Map(rows.map(s => [String(s.nis), s]));
         });
       p.catch(() => { if (c.get(kunci) === p) c.delete(kunci); });
       c.set(kunci, p);
@@ -823,19 +830,19 @@ export class Engine extends DurableObject {
   // ==========================================================================
   //  CADANGAN GITHUB (opsional, bila DATA_REPO diisi)
   // ==========================================================================
+  /** Tandai data yang berubah → dikirim ke serverB. Nomor urut mencegah perubahan di tengah pengiriman ikut dianggap terkirim. */
   tandaiCadangan(k) {
-    if (!this.env.DATA_REPO || this.bdirty.has(k)) return;
-    this.bdirty.add(k);
-    this.metaSet('bdirty', JSON.stringify([...this.bdirty]));
+    if (!this.env.DATA_REPO) return;
+    this.bseq = (this.bseq || 0) + 1; this.bver.set(k, this.bseq); this.bubah = Date.now();
+    if (!this.bdirty.has(k)) { this.bdirty.add(k); this.metaSet('bdirty', JSON.stringify([...this.bdirty])); }
     this.aturAlarm().catch(() => {});
   }
+  /** Data siswa berubah hari ini: sampai terkirim ke serverB (dan sampai besok), daftar siswa dibaca dari D1. */
+  siswaBerubah() { this.metaSet('siswaUbah', String(now())); this.tandaiCadangan('siswa'); }
   async cadangkanOtomatis() {
-    if (!this.env.DATA_REPO || !this.env.GITHUB_TOKEN || !this.bdirty.size) return null;
-    if (Date.now() - this.lastBackup < BACKUP_MS) return null;
-    // tunda selama ada siswa yang sedang mengerjakan (dicadangkan setelah ujian selesai)
-    if (this.adaPeserta()) return null;
-    // gagal (mis. token salah) → jangan dicoba tiap pemicu, tunggu 6 jam atau sampai admin menekan tombol cadangkan
-    if (this.cadanganGagal && Date.now() - this.cadanganGagal.t < 6 * 3600000) return null;
+    // hanya bila ada perubahan, sudah lewat jeda, tidak ada ujian berjalan, dan tidak sedang menunggu setelah gagal
+    const w = this.waktuCadangan();
+    if (!w || Date.now() < w) return null;
     try { const r = await this.cadangkan(); this.cadanganGagal = null; this.metaSet('cadanganGagal', ''); return r; }
     catch (e) {
       this.cadanganGagal = { t: Date.now(), pesan: X.errInfo(e).msg.slice(0, 300) };
@@ -846,28 +853,91 @@ export class Engine extends DurableObject {
   async cadangkan() {
     const repo = await cekRepoData(this.env);
     const keys = [...this.bdirty].slice(0, 30), files = {}, DB = this.env.DB;
+    const versi = new Map(keys.map(k => [k, this.bver.get(k) || 0]));   // keadaan saat mulai dibaca
     for (const k of keys) {
       if (k === 'config') files['config.json'] = JSON.stringify(this.config, null, 1);
       else if (k === 'guru') files['users/guru.json'] = JSON.stringify([...this.guru.values()], null, 1);
-      else if (k === 'siswa') files['users/siswa.json'] = JSON.stringify((await DB.prepare(`SELECT nis, nama, kelas, salt, hash FROM siswa`).all()).results, null, 1);
+      else if (k === 'siswa') files['users/siswa.json'] = JSON.stringify((await DB.prepare(`SELECT nis, nama, kelas, salt, hash, sandi FROM siswa`).all()).results);
       else if (k === 'ujian') files['ujian/_index.json'] = JSON.stringify([...this.ujian.values()], null, 1);
       else if (k === 'bankidx') files['bank/_index.json'] = JSON.stringify([...this.bankIdx.values()], null, 1);
       else if (k.startsWith('bank:')) { const b = await this.getBank(k.slice(5)); files['bank/' + k.slice(5) + '.json'] = b ? JSON.stringify(b, null, 1) : null; }
       else if (k.startsWith('hasil:')) {
         const id = k.slice(6), u = this.ujian.get(id);
-        const r = await DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(id).all();
         const arsip = { ujianId: id, nama: u ? u.nama : '', mapel: u ? u.mapel : '', bankId: u ? u.bankId : '', peserta: {}, diperbarui: now() };
-        for (const x of r.results) arsip.peserta[x.nis] = await X.bukaData(x.data);
+        // sesi ujian masih di memori & sudah tersimpan semua → ambil dari memori (tanpa membaca D1)
+        const L = this.L.get(id);
+        if (L) await this.syncD1();
+        if (L && [...L.P.values()].every(P => P.status !== 'selesai' || P.syncVer === P.ver)) {
+          for (const P of L.P.values()) if (P.status === 'selesai') arsip.peserta[P.nis] = rekam(P);
+        } else {
+          const r = await DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(id).all();
+          for (const x of r.results) arsip.peserta[x.nis] = await X.bukaData(x.data);
+        }
         files['hasil/' + id + '.json'] = JSON.stringify(arsip);
       }
     }
-    if (keys.length) await commitFiles(this.env, repo, files, 'Cadangan CBT: ' + keys.length + ' berkas');
-    keys.forEach(k => this.bdirty.delete(k));
+    const sha = keys.length ? await commitFiles(this.env, repo, files, 'Cadangan CBT: ' + keys.length + ' berkas') : null;
+    const t = now();
+    for (const k of keys) {
+      if ((this.bver.get(k) || 0) !== versi.get(k)) continue;        // berubah lagi selama dikirim → kirim ulang nanti
+      this.bdirty.delete(k);
+      if (!sha) continue;
+      // catat commit salinan yang identik dengan D1 → dipakai untuk membaca data hari-hari sebelumnya
+      if (k === 'siswa') this.metaSet('ghSiswa', JSON.stringify({ sha, t }));
+      else if (k.startsWith('hasil:')) { if (files['hasil/' + k.slice(6) + '.json']) this.ghHasil[k.slice(6)] = { sha, t }; }
+    }
+    this.metaSet('ghHasil', JSON.stringify(this.ghHasil));
     this.lastBackup = Date.now();
     this.metaSet('bdirty', JSON.stringify([...this.bdirty]));
     this.metaSet('lastBackup', this.lastBackup);
+    if (this.bdirty.size) this.aturAlarm().catch(() => {});
     return { berkas: keys.length, sisa: this.bdirty.size };
   }
+
+  // ==========================================================================
+  //  DATA GABUNGAN serverB + D1: data hari-hari sebelumnya yang sudah tersalin
+  //  di serverB dibaca dari sana (0 baris D1); data hari ini tetap dari D1.
+  // ==========================================================================
+  ghSiap() { return !!(this.env.DATA_REPO && this.env.GITHUB_TOKEN); }
+  awalHari() { return X.hariIni_(now())[0]; }
+  /** Baca satu berkas salinan pada commit tertentu (tidak berubah) — disimpan di memori. */
+  bacaGH(path, sha) {
+    const c = this.ghMem || (this.ghMem = new Map()), k = sha + ':' + path;
+    if (c.has(k)) return c.get(k);
+    const p = bacaBerkas(this.env, this.env.DATA_REPO, path, sha).then(t => t === null ? null : JSON.parse(t));
+    p.catch(() => { if (c.get(k) === p) c.delete(k); });
+    c.set(k, p);
+    if (c.size > 30) c.delete(c.keys().next().value);
+    return p;
+  }
+  /** Seluruh siswa dari serverB bila salinannya sama dengan D1 dan tidak ada perubahan hari ini; null = pakai D1. */
+  async siswaGH() {
+    if (!this.ghSiap() || this.bdirty.has('siswa')) return null;
+    const g = parse_(this.metaGet('ghSiswa'), null); if (!g) return null;
+    const ubah = Number(this.metaGet('siswaUbah') || 0);
+    if (ubah >= this.awalHari() || ubah > g.t) return null;
+    try { const rows = await this.bacaGH('users/siswa.json', g.sha); return Array.isArray(rows) ? rows.map(s => ({ ...s, nis: String(s.nis) })) : null; }
+    catch (e) { console.error('serverB siswa', e && e.message); return null; }
+  }
+  /** Hasil ujian yang sudah lewat (sebelum hari ini) dari serverB; null = pakai D1. */
+  async hasilGH(u, arsipkan) {
+    if (!this.ghSiap() || !(u.selesai < this.awalHari()) || this.bdirty.has('hasil:' + u.id)) return null;
+    const g = this.ghHasil[u.id];
+    if (!g) { if (arsipkan) this.tandaiCadangan('hasil:' + u.id); return null; }   // belum ada salinan → kirim sekali
+    try {
+      const a = await this.bacaGH('hasil/' + u.id + '.json', g.sha);
+      return a && a.peserta ? Object.values(a.peserta).filter(r => r && r.status === 'selesai').map(r => ({ ...r, nis: String(r.nis) })) : null;
+    } catch (e) { console.error('serverB hasil', e && e.message); return null; }
+  }
+  /** Semua rekam hasil (selesai) satu ujian: serverB untuk ujian hari-hari sebelumnya, D1 untuk hari ini. */
+  async hasilSemua(id, arsipkan = true) {
+    const u = this.ujian.get(id);
+    const gh = u ? await this.hasilGH(u, arsipkan) : null;
+    if (gh) return gh;
+    const r = await this.env.DB.prepare(`SELECT data FROM hasil WHERE ujian_id = ?`).bind(id).all();
+    return (await X.bukaSemua(r.results.map(x => x.data))).map(x => ({ ...x, nis: String(x.nis) }));
+  }
+  lupakanGH() { this.metaSet('ghSiswa', ''); this.ghHasil = {}; this.metaSet('ghHasil', '{}'); this.ghMem = null; }
 }
 
 // ============================================================================
@@ -879,6 +949,7 @@ A._dev = async function (d) {
   if (this.env.DEV_MODE !== '1') throw new AppError('Tidak tersedia');
   if (d.offset !== undefined) X.setOffset(d.offset);
   if (d.rawat) await this.rawat();
+  if (d.lepas) { for (const [id, L] of this.L) if (!L.mons.size && !L.socks.size) this.L.delete(id); this.roster = null; this.ghMem = null; }
   if (d.flush) { this.flushJw(); await this.syncD1(); }
   if (d.ukuranHasil) return { hasil: await this.env.DB.prepare(`SELECT COUNT(*) AS n, AVG(length(data)) AS rata, SUM(length(data)) AS total FROM hasil`).first(), db: await ukuranD1(this.env.DB) };
   const ukur = this.ukurBaca ? this.ukurBaca() : null;
@@ -962,7 +1033,7 @@ A.gantiPassword = async function (d, me) {
       if (!s || !(await X.cekPw_(s, d.lama))) throw new AppError('Kata sandi lama salah');
       const cr = await X.makeCred_(baru);
       await DB.prepare(`UPDATE siswa SET salt = ?, hash = ?, sandi = '-' WHERE nis = ?`).bind(cr.salt, cr.hash, me.id).run();
-      this.tandaiCadangan('siswa');
+      this.siswaBerubah();
     } else {
       const g = this.guru.get(me.id);
       if (!g || !(await X.cekPw_(g, d.lama))) throw new AppError('Kata sandi lama salah');
@@ -1015,7 +1086,8 @@ A.dashboard = async function (d, me) {
     if (this.jmlSiswa === null) {
       // COUNT(*) membaca SEMUA baris siswa → dihitung sekali setelah data siswa berubah, lalu disimpan
       const m = this.metaGet('c_jml');
-      this.jmlSiswa = m ? Number(m) : (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM siswa`).first()).n;
+      const gh = m ? null : await this.siswaGH();
+      this.jmlSiswa = m ? Number(m) : gh ? gh.length : (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM siswa`).first()).n;
       if (!m) this.metaSet('c_jml', String(this.jmlSiswa));
     }
     res.jumlahSiswa = this.jmlSiswa;
@@ -1123,18 +1195,32 @@ A.listUjian = async function (d, me) {
     const untuk = str_(d && d.untuk, 20), t = now();
     const awas = u => this.kelasAwas(me, u).size > 0;
     if (untuk === 'jadwal') list = list.filter(u => u.aktif && X.ujianHariIni_(u, t));
-    else if (untuk === 'monitor') list = list.filter(awas);
+    else if (untuk === 'monitor') list = list.filter(u => awas(u) && X.statusJadwal_(u, t) === 'berlangsung');   // hanya yang sedang berlangsung
     else if (untuk === 'hasil') list = list.filter(u => u.guruId === me.id);
     else list = list.filter(u => u.guruId === me.id || awas(u));
   }
   return list.map(u => this.ringkasUntuk(u, me)).sort((a, b) => b.mulai - a.mulai);
 };
-/** Pengawas dari formulir jadwal: [{id, kelas:[]}] — kelas kosong = mengawasi semua kelas peserta. */
-function bacaPengawas(self, d, kelas) {
-  const out = [], ada = new Set();
+const kecil = v => String(v || '').trim().toLowerCase();
+/** Guru yang sudah mengawasi ujian dengan mapel sama tetapi tingkat berbeda (ujian yang belum berakhir). */
+function bentrokPengawas(self, idGuru, mapel, tingkat, kecuali) {
+  const t = now();
+  for (const u of self.ujian.values()) {
+    if (u.id === kecuali || u.selesai < t || kecil(u.mapel) !== kecil(mapel) || kecil(u.tingkat) === kecil(tingkat)) continue;
+    if ((u.pengawas || []).some(p => p.id === idGuru)) return u;
+  }
+  return null;
+}
+/** Pengawas dari formulir jadwal: [{id, kelas:[]}] — kelas kosong = mengawasi semua kelas peserta. Admin tidak termasuk. */
+function bacaPengawas(self, d, kelas, mapel, tingkat, lama) {
+  const out = [], ada = new Set(), sebelumnya = new Set(((lama && lama.pengawas) || []).map(p => p.id));
   for (const p of (Array.isArray(d.pengawas) ? d.pengawas : []).slice(0, 100)) {
     const id = str_(p && p.id, 60), g = self.guru.get(id);
-    if (!g || ada.has(id)) continue;
+    if (!g || g.role === 'admin' || ada.has(id)) continue;
+    if (!sebelumnya.has(id)) {
+      const b = bentrokPengawas(self, id, mapel, tingkat, lama && lama.id);
+      if (b) throw new AppError(g.nama + ' sudah menjadi pengawas ' + b.mapel + ' tingkat ' + b.tingkat + ' (“' + b.nama + '”). Pilih guru lain.');
+    }
     ada.add(id);
     let kl = [...new Set((Array.isArray(p.kelas) ? p.kelas : []).map(k => str_(k, 40)))].filter(k => kelas.includes(k));
     if (kl.length === kelas.length) kl = [];
@@ -1154,14 +1240,15 @@ A.saveUjian = async function (d, me) {
   const bank = await this.getBank(str_(d.bankId));
   if (!bank) throw new AppError('Bank soal tidak ditemukan');
   if (!bank.soal.length) throw new AppError('Bank soal masih kosong');
-  const pengawas = bacaPengawas(this, d, kelas);
+  const tingkatU = str_(d.tingkat, 20) || bank.tingkat;
+  const pengawas = bacaPengawas(this, d, kelas, bank.mapel, tingkatU, d.id ? this.ujian.get(str_(d.id)) : null);
   const u = await this.kunci(async () => {
     const lama = d.id ? this.ujian.get(str_(d.id)) : null;
     if (d.id && !lama) throw new AppError('Jadwal tidak ditemukan');
     const t = now();
     const u = {
       id: lama ? lama.id : uid_('u'), nama,
-      bankId: bank.id, bankJudul: bank.judul, mapel: bank.mapel, tingkat: str_(d.tingkat, 20) || bank.tingkat,
+      bankId: bank.id, bankJudul: bank.judul, mapel: bank.mapel, tingkat: tingkatU,
       guruId: bank.guruId, guruNama: bank.guruNama, jumlahSoal: bank.soal.length,
       kelas, mulai, selesai, durasi, pengawas,
       acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: bool_(d.pakaiToken),
@@ -1196,7 +1283,7 @@ A.deleteUjian = async function (d, me) {
     let n = 0;
     const L = this.L.get(u.id);
     if (L) { for (const P of L.P.values()) if (P.status === 'mengerjakan' || P.status === 'selesai') n++; }
-    else n = (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM hasil WHERE ujian_id = ?`).bind(u.id).first()).n;
+    else { const gh = await this.hasilGH(u, false); n = gh ? gh.length : (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM hasil WHERE ujian_id = ?`).bind(u.id).first()).n; }
     if (n && !d.paksa) throw new AppError('Sudah ada ' + n + ' peserta yang mengerjakan. ' + (d.hapusHasil ? 'Hasil mereka ikut dihapus dari database.' : 'Hasil yang sudah ada tetap tersimpan di database.'), 'ADA_PESERTA');
     if (L) {
       await this.syncD1();
@@ -1207,6 +1294,7 @@ A.deleteUjian = async function (d, me) {
     }
     await this.env.DB.prepare(`DELETE FROM ujian WHERE id = ?`).bind(u.id).run();
     this.ujian.delete(u.id);
+    if (this.ghHasil[u.id]) { delete this.ghHasil[u.id]; this.metaSet('ghHasil', JSON.stringify(this.ghHasil)); }
     this.tandaiCadangan('ujian');
     if (d.hapusHasil) {
       // mengosongkan ruang D1. Cadangan hasil yang belum terkirim ke GitHub dikirim dulu (bila diatur).
@@ -1302,8 +1390,7 @@ A.hasilUjian = async function (d, me) {
     const t = now();
     for (const P of L.P.values()) map.set(P.nis, (P.status === 'selesai' || P.status === 'mengerjakan') ? { ...rekam(P), status: statusTampil(P, t) } : { nis: P.nis, nama: P.nama, kelas: P.kelas, status: P.status });
   } else {
-    const r = await this.env.DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(u.id).all();
-    for (const x of r.results) map.set(x.nis, await X.bukaData(x.data));
+    for (const x of await this.hasilSemua(u.id)) map.set(x.nis, x);
   }
   for (const [nis, s] of await this.siswaUjian(u, L)) if (!map.has(nis)) map.set(nis, { nis, nama: s.nama, kelas: s.kelas, status: 'belum' });
   const peserta = [...map.values()];
@@ -1321,6 +1408,8 @@ async function ambilRekam(self, u, nisList) {
   await self.syncD1();
   const out = new Map(), L = self.L.get(u.id);
   if (L) { for (const nis of nisList) { const P = L.P.get(nis); if (P) out.set(nis, rekam(P)); } return out; }
+  const gh = await self.hasilGH(u, false);   // ujian hari-hari sebelumnya → salinan serverB
+  if (gh) { const mau = new Set(nisList); gh.forEach(x => { if (mau.has(x.nis)) out.set(x.nis, x); }); return out; }
   const r = await self.env.DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?1 AND nis IN (SELECT value FROM json_each(?2))`).bind(u.id, JSON.stringify(nisList)).all();
   for (const x of r.results) out.set(x.nis, await X.bukaData(x.data));
   return out;
@@ -1377,7 +1466,7 @@ A.hitungUlang = async function (d, me) {
     const L = this.L.get(u.id);
     let recs;
     if (L) recs = [...L.P.values()].filter(P => P.status === 'selesai').map(rekam);
-    else recs = (await X.bukaSemua((await this.env.DB.prepare(`SELECT data FROM hasil WHERE ujian_id = ?`).bind(u.id).all()).results.map(x => x.data))).filter(r => r.status === 'selesai');
+    else recs = (await this.hasilSemua(u.id)).filter(r => r.status === 'selesai');
     const t = now();
     recs.forEach(rec => { rec.hasil = X.hitungHasil_(bank, rec.jawaban, rec.manual); rec.ver = t; });
     if (recs.length) await this.tulisRekam(u.id, recs);
@@ -1480,7 +1569,8 @@ A.importGuru = async function (d, me) {
 const publikSiswa = s => ({ nis: String(s.nis), nama: s.nama, kelas: s.kelas });
 A.listSiswa = async function (d, me) {
   X.reqAdmin_(me);
-  return (await this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa`).all()).results.map(publikSiswa);
+  const gh = await this.siswaGH();   // tidak ada perubahan hari ini → dari serverB (0 baris D1)
+  return (gh || (await this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa`).all()).results).map(publikSiswa);
 };
 function kelasBaruKeConfig(self, kelasBaru) {
   const cfg = JSON.parse(JSON.stringify(self.config));
@@ -1515,7 +1605,7 @@ A.saveSiswa = async function (d, me) {
     if (cfg) st.push(DB.prepare(`INSERT OR REPLACE INTO kv (k, v) VALUES ('config', ?)`).bind(JSON.stringify(cfg)));
     await DB.batch(st);
     if (cfg) { this.config = cfg; this.tandaiCadangan('config'); }
-    this.lupakanSiswa(); this.tandaiCadangan('siswa');
+    this.lupakanSiswa(); this.siswaBerubah();
     return { nis, nama, kelas };
   });
 };
@@ -1562,7 +1652,7 @@ A.importSiswa = async function (d, me) {
     if (cfg) st.push(DB.prepare(`INSERT OR REPLACE INTO kv (k, v) VALUES ('config', ?)`).bind(JSON.stringify(cfg)));
     for (let i = 0; i < st.length; i += 20) await DB.batch(st.slice(i, i + 20));
     if (cfg) { this.config = cfg; this.tandaiCadangan('config'); }
-    this.lupakanSiswa(); this.tandaiCadangan('siswa');
+    this.lupakanSiswa(); this.siswaBerubah();
     const total = (await DB.prepare(`SELECT COUNT(*) AS n FROM siswa`).first()).n;
     this.jmlSiswa = total;
     return { baru, ubah, lewati, total, config: cfg };
@@ -1573,7 +1663,7 @@ A.deleteSiswa = async function (d, me) {
   const hapus = (d.nis || []).map(String);
   return this.kunci(async () => {
     const r = await this.env.DB.prepare(`DELETE FROM siswa WHERE nis IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(hapus)).run();
-    this.lupakanSiswa(); this.tandaiCadangan('siswa');
+    this.lupakanSiswa(); this.siswaBerubah();
     return r.meta ? r.meta.changes : hapus.length;
   });
 };
@@ -1593,9 +1683,9 @@ A.sinkronSekarang = async function (d, me) {
 /** Kolom password untuk Excel data siswa: sandi dari admin, NIS bila kosong, atau keterangan. Hanya admin. */
 A.sandiSiswa = async function (d, me) {
   X.reqAdmin_(me);
-  const r = await this.env.DB.prepare(`SELECT nis, salt, hash, sandi FROM siswa`).all();
+  const rows = (await this.siswaGH()) || (await this.env.DB.prepare(`SELECT nis, salt, hash, sandi FROM siswa`).all()).results;
   const out = {};
-  for (const s of r.results) out[s.nis] = await X.bacaSandi_(s, this.secret, String(s.nis), 'siswa');
+  for (const s of rows) out[s.nis] = await X.bacaSandi_(s, this.secret, String(s.nis), 'siswa');
   return out;
 };
 A.sandiGuru = async function (d, me) {
@@ -1610,7 +1700,7 @@ A.profilSaya = async function (d, me) { X.reqGuru_(me); const g = this.guru.get(
 /** Muat ulang salinan data (guru, bank, jadwal, pengaturan) dari D1 — bila data D1 diubah di luar aplikasi. */
 A.muatUlangData = async function (d, me) {
   X.reqAdmin_(me);
-  return this.kunci(async () => { this.secret = await siapkanD1(this.env.DB); await this.muatCache(); return { guru: this.guru.size, bank: this.bankIdx.size, ujian: this.ujian.size }; });
+  return this.kunci(async () => { this.secret = await siapkanD1(this.env.DB); await this.muatCache(); this.lupakanGH(); if (this.ghSiap()) this.tandaiCadangan('siswa'); return { guru: this.guru.size, bank: this.bankIdx.size, ujian: this.ujian.size }; });
 };
 A.statusSistem = async function (d, me) {
   X.reqAdmin_(me);
@@ -1618,7 +1708,7 @@ A.statusSistem = async function (d, me) {
   for (const L of this.L.values()) { for (const P of L.P.values()) if (P.status === 'mengerjakan') mengerjakan++; siswaOnline += L.socks.size; monitor += L.mons.size; }
   return {
     versi: X.VERSI, sesiAktif: this.L.size, mengerjakan, siswaOnline, monitor,
-    mediaRepo: this.env.MEDIA_REPO || (this.repoContoh ? 'masih "namaakun/…" — ganti di wrangler.jsonc' : ''), dataRepo: this.env.DATA_REPO || '', adaToken: !!this.env.GITHUB_TOKEN,
+    adaB: this.ghSiap(), adaMedia: !!this.env.MEDIA_REPO,
     antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0, cadanganGagal: this.cadanganGagal || null,
     ukuranDb: await ukuranD1(this.env.DB), batasDb: 500 * 1024 * 1024
   };
@@ -1627,7 +1717,7 @@ A.statusSistem = async function (d, me) {
 async function ukuranD1(DB) {
   try { const r = await DB.prepare(`SELECT 1`).all(); return (r.meta && (r.meta.size_after || r.meta.sizeAfter)) || 0; } catch (e) { return 0; }
 }
-A.imporGithub = async function (d, me) {
+A.imporCadangan = A.imporGithub = async function (d, me) {
   X.reqAdmin_(me);
   return this.kunci(async () => {
     for (const L of this.L.values()) for (const P of L.P.values()) if (P.status === 'mengerjakan') throw new AppError('Ada siswa yang sedang ujian. Impor hanya boleh saat tidak ada ujian berjalan.');
@@ -1642,10 +1732,10 @@ A.imporGithub = async function (d, me) {
       n.guru += g.length;
       st.push(DB.prepare(`INSERT OR REPLACE INTO guru (id, username, data) SELECT json_extract(value,'$.id'), json_extract(value,'$.username'), value FROM json_each(?)`).bind(JSON.stringify(g)));
     }
-    const siswa = (js('users/siswa.json') || []).filter(s => s && s.nis).map(s => ({ n: String(s.nis), a: s.nama, k: s.kelas, s: s.salt || null, h: s.hash || null }));
+    const siswa = (js('users/siswa.json') || []).filter(s => s && s.nis).map(s => ({ n: String(s.nis), a: s.nama, k: s.kelas, s: s.salt || null, h: s.hash || null, p: s.sandi || null }));
     for (const g of potong(siswa, 800000)) {
       n.siswa += g.length;
-      st.push(DB.prepare(`INSERT OR REPLACE INTO siswa (nis, nama, kelas, salt, hash) SELECT json_extract(value,'$.n'), json_extract(value,'$.a'), json_extract(value,'$.k'), json_extract(value,'$.s'), json_extract(value,'$.h') FROM json_each(?)`).bind(JSON.stringify(g)));
+      st.push(DB.prepare(`INSERT OR REPLACE INTO siswa (nis, nama, kelas, salt, hash, sandi) SELECT json_extract(value,'$.n'), json_extract(value,'$.a'), json_extract(value,'$.k'), json_extract(value,'$.s'), json_extract(value,'$.h'), json_extract(value,'$.p') FROM json_each(?)`).bind(JSON.stringify(g)));
     }
     for (const p of Object.keys(f)) {
       const m = p.match(/^bank\/([a-zA-Z0-9_-]{3,40})\.json$/);
@@ -1674,6 +1764,7 @@ A.imporGithub = async function (d, me) {
     if (hasilRows.length) await this.tulisHasilD1(hasilRows, []);
     await this.muatCache();
     this.L.clear(); this.sql.exec(`DELETE FROM p`); this.sql.exec(`DELETE FROM jw`);
+    this.lupakanGH(); this.siswaBerubah();
     return n;
   });
 };

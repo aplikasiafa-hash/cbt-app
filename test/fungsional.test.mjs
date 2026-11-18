@@ -75,7 +75,7 @@ ok('guru tak bisa buka bank admin', !r.ok);
 
 console.log('Upload gambar');
 r = await call('uploadGambar', { data: 'data:image/png;base64,AAAA', tipe: 'image/png' }, GURU);
-ok('tanpa MEDIA_REPO → pesan jelas', !r.ok && /MEDIA_REPO/.test(r.error), r);
+ok('tanpa MEDIA_REPO → pesan jelas tanpa nama layanan', !r.ok && /belum diatur/.test(r.error) && !/github|MEDIA_REPO/i.test(r.error), r);
 
 console.log('Jadwal ujian');
 const t0 = Date.now();

@@ -1,11 +1,11 @@
 /**
- * GitHub: unggah gambar soal (repo media publik) + cadangan/impor data (repo data privat).
- * Dipanggil hanya dari Durable Object.
+ * GitHub ("serverB" di tampilan aplikasi): unggah gambar soal (repo media publik) + cadangan/impor data (repo data privat).
+ * Dipanggil hanya dari Durable Object. Pesan untuk pengguna tidak menyebut nama layanan, alamat, atau nama repo.
  */
 import { AppError, uid_ } from './shared.js';
 
 function token(env) {
-  if (!env.GITHUB_TOKEN) throw new AppError('GITHUB_TOKEN belum diatur. Jalankan: npx wrangler secret put GITHUB_TOKEN');
+  if (!env.GITHUB_TOKEN) throw new AppError('serverB belum diatur (token belum diisi).');
   return env.GITHUB_TOKEN;
 }
 const branch = env => env.BRANCH || 'main';
@@ -18,17 +18,22 @@ export async function gh(env, method, path, body, accept) {
       Authorization: 'Bearer ' + token(env),
       Accept: accept || 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'cbt-sekolah-cloudflare',
+      'User-Agent': 'cbt-sekolah',
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
     },
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
   return res;
 }
+/** Pesan singkat tanpa detail layanan. */
+function alasan(status) {
+  const k = { 401: 'token tidak valid atau kedaluwarsa', 403: 'akses ditolak (periksa izin token)', 404: 'penyimpanan tidak ditemukan atau token tidak punya akses', 409: 'sedang dipakai, coba lagi', 422: 'sedang dipakai, coba lagi', 429: 'terlalu banyak permintaan, coba lagi nanti' }[status];
+  return 'serverB menolak (' + status + (k ? ': ' + k : status >= 500 ? ': server sibuk' : '') + ')';
+}
 async function ghJson(env, method, path, body) {
   const r = await gh(env, method, path, body);
   const text = await r.text();
-  if (!r.ok) { const e = new AppError('GitHub ' + r.status + ' (' + method.toUpperCase() + ' ' + path.split('?')[0] + '): ' + text.slice(0, 200), r.status === 409 || r.status === 422 ? 'CONFLICT' : (r.status >= 500 || r.status === 429 ? 'BUSY' : 'ERR')); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new AppError(alasan(r.status), r.status === 409 || r.status === 422 ? 'CONFLICT' : (r.status >= 500 || r.status === 429 ? 'BUSY' : 'ERR')); e.status = r.status; throw e; }
   return text ? JSON.parse(text) : {};
 }
 
@@ -37,7 +42,7 @@ async function ghJson(env, method, path, body) {
 // ---------------------------------------------------------------------------
 export async function unggahGambar(env, d, namaGuru) {
   const repo = env.MEDIA_REPO;
-  if (!repo) throw new AppError('MEDIA_REPO belum diatur. Di wrangler.jsonc ganti "namaakun" dengan nama akun GitHub Anda (contoh: sman5/cbt-media).');
+  if (!repo) throw new AppError('Penyimpanan gambar (serverB) belum diatur. Hubungi admin.');
   const tipe = String(d.tipe || '');
   const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }[tipe];
   if (!ext) throw new AppError('Format gambar tidak didukung (gunakan JPG, PNG, WEBP, GIF)');
@@ -54,7 +59,7 @@ export async function unggahGambar(env, d, namaGuru) {
     if (r.status !== 409 && r.status !== 422) break;
     await new Promise(ok => setTimeout(ok, 300 + Math.random() * 700));
   }
-  throw new AppError('Gagal mengunggah gambar ke GitHub (' + last.status + '): ' + last.text.slice(0, 150));
+  throw new AppError('Gagal mengunggah gambar. ' + alasan(last.status));
 }
 function urlMedia(env, repo, sha, path) {
   const mode = env.MEDIA_CDN || 'jsdelivr', parts = repo.split('/');
@@ -68,9 +73,9 @@ function urlMedia(env, repo, sha, path) {
 // ---------------------------------------------------------------------------
 export async function cekRepoData(env) {
   const repo = env.DATA_REPO;
-  if (!repo) throw new AppError('DATA_REPO belum diatur (opsional, untuk cadangan ke GitHub)');
+  if (!repo) throw new AppError('Penyimpanan cadangan (serverB) belum diatur.');
   const info = await ghJson(env, 'get', '/repos/' + repo);
-  if (!info.private) throw new AppError('Repo ' + repo + ' HARUS PRIVAT karena berisi kunci jawaban & kata sandi.');
+  if (!info.private) throw new AppError('Penyimpanan cadangan di serverB HARUS PRIVAT karena berisi kunci jawaban & kata sandi.');
   return repo;
 }
 
@@ -98,10 +103,20 @@ export async function commitFiles(env, repo, files, message) {
     const u = await gh(env, 'patch', '/repos/' + repo + '/git/refs/heads/' + br, { sha: cm.sha, force: false });
     await u.text();
     if (u.ok) return cm.sha;
-    if (u.status !== 409 && u.status !== 422) throw new AppError('Gagal menyimpan ke GitHub (' + u.status + ')');
+    if (u.status !== 409 && u.status !== 422) throw new AppError('Gagal menyimpan. ' + alasan(u.status));
     await new Promise(ok => setTimeout(ok, 300 + Math.random() * 700));
   }
-  throw new AppError('GitHub sedang sibuk, coba lagi', 'BUSY');
+  throw new AppError('serverB sedang sibuk, coba lagi', 'BUSY');
+}
+
+// ---------------------------------------------------------------------------
+//  BACA SATU BERKAS pada commit tertentu (salinan data hari-hari sebelumnya). null = tidak ada.
+// ---------------------------------------------------------------------------
+export async function bacaBerkas(env, repo, path, ref) {
+  const r = await gh(env, 'get', '/repos/' + repo + '/contents/' + encPath(path) + '?ref=' + encodeURIComponent(ref || branch(env)), undefined, 'application/vnd.github.raw+json');
+  if (r.status === 404) { await r.text(); return null; }
+  if (!r.ok) { await r.text(); throw new AppError(alasan(r.status)); }
+  return r.text();
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +124,7 @@ export async function commitFiles(env, repo, files, message) {
 // ---------------------------------------------------------------------------
 export async function unduhRepo(env, repo) {
   const r = await gh(env, 'get', '/repos/' + repo + '/tarball/' + encodeURIComponent(branch(env)));
-  if (!r.ok) throw new AppError('Gagal mengunduh repo ' + repo + ' (' + r.status + '). Periksa DATA_REPO dan izin token.');
+  if (!r.ok) throw new AppError('Gagal mengunduh data. ' + alasan(r.status));
   const buf = new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
   return bacaTar(buf);
 }

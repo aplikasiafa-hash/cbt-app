@@ -9,6 +9,11 @@ http.createServer((req, res) => {
     if (!/^Bearer \S+/.test(req.headers.authorization || '')) { o = 401; j = { message: 'Bad credentials' }; }
     else if ((m2 = p.match(/^\/repos\/([^/]+)\/([^/]+)$/)) && m === 'GET') { o = 200; j = { full_name: m2[1] + '/' + m2[2], private: m2[2] === 'cbt-data' }; }
     else if (/\/tarball\//.test(p) && m === 'GET') { res.writeHead(200, { 'content-type': 'application/x-gzip' }); return res.end(fs.readFileSync(TAR)); }
+    else if ((m2 = p.match(/\/contents\/(.+)$/)) && m === 'GET') {
+      const ref = new URL(req.url, 'http://x').searchParams.get('ref'), c = commits[ref] || commits[head], isi = c && trees[c.tree] && trees[c.tree][decodeURIComponent(m2[1])];
+      log.push({ baca: decodeURIComponent(m2[1]), ref });
+      if (isi === undefined) { o = 404; j = { message: 'Not Found' }; } else { res.writeHead(200, { 'content-type': 'application/vnd.github.raw' }); return res.end(isi); }
+    }
     else if (/\/contents\//.test(p) && m === 'PUT') { const b = JSON.parse(body); log.push({ put: p, bytes: b.content.length }); o = 201; j = { commit: { sha: sha() } }; }
     else if (/\/git\/ref\/heads\//.test(p) && m === 'GET') { o = 200; j = { object: { sha: head } }; }
     else if ((m2 = p.match(/\/git\/commits\/(\w+)$/)) && m === 'GET') { o = 200; j = { tree: { sha: commits[m2[1]].tree } }; }

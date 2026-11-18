@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.5.0-CBT';
+export const VERSI = '2.6.0-CBT';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -28,10 +28,11 @@ export function errInfo(err) {
   const msg = String((err && err.message) || err);
   if (err && err.app) return { msg, code: err.code };
   if (/exceeded|quota|limit.*(reached|exceed)|daily/i.test(msg) && /D1|row|database|request/i.test(msg)) {
-    return { msg: 'Kuota harian Cloudflare sudah habis. Kuota pulih pukul 08.00 WITA (00.00 UTC).', code: 'KUOTA' };
+    return { msg: 'Kuota harian serverC sudah habis. Kuota pulih pukul 08.00 WITA.', code: 'KUOTA' };
   }
   if (/overloaded|too many|timed? ?out|network|reset|unavailable|busy|internal error/i.test(msg)) return { msg: 'Server sedang sibuk, mencoba lagi…', code: 'BUSY' };
-  return { msg, code: 'ERR' };
+  // pesan teknis tanpa nama layanan
+  return { msg: msg.replace(/\bD1(_[A-Z_]+)?:?/g, 'database:').replace(/cloudflare|workers?\.dev|durable ?objects?/ig, 'serverC').replace(/github/ig, 'serverB'), code: 'ERR' };
 }
 
 // ---------------------------------------------------------------------------

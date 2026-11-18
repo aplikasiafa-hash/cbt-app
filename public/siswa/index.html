@@ -449,9 +449,9 @@ p{margin:0}
 <script>
 /* =====================================================================
    PENGATURAN
-   Bila aplikasi ini dibuka dari alamat Cloudflare yang sama (…workers.dev/siswa/), biarkan '/api'.
-   Bila di-hosting di tempat lain (mis. GitHub Pages), isi alamat lengkap, contoh:
-   const API_URL = 'https://cbt-sekolah.namaakun.workers.dev/api';
+   Bila aplikasi ini dibuka dari alamat server yang sama (…/siswa/), biarkan '/api'.
+   Bila di-hosting di tempat lain, isi alamat lengkap server, contoh:
+   const API_URL = 'https://alamat-server-anda/api';
    ===================================================================== */
 const API_URL = window.CBT_API_URL || '/api';
 
@@ -516,7 +516,7 @@ let onAuthGagal = () => {};
 const errKuota = () => Object.assign(new Error('Server ujian mencapai batas harian. Lapor ke pengawas — jawaban Anda tetap aman di perangkat ini.'), { code: 'KUOTA' });
 /* =====================================================================
    KONEKSI TUNGGAL (WebSocket): semua aksi lewat SATU koneksi yang dibuka
-   sekali. 1 kali buka aplikasi = 1 request kuota Cloudflare. Bila koneksi
+   sekali. 1 kali buka aplikasi = 1 request kuota server. Bila koneksi
    ini tidak tersedia, aplikasi otomatis memakai HTTP biasa.
    ===================================================================== */
 const Sok = {
@@ -583,7 +583,7 @@ const Sok = {
     });
   }
 };
-const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+const AKSI_LAMA = new Set(['imporCadangan', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
 /** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
 async function apiSok(action, data, tok, onAuth) {
   if (!Sok.tersedia()) return null;

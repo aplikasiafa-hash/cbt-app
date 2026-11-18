@@ -17,7 +17,7 @@ const ADM = (await call('loginGuru', { username: 'admin', password: 'admin123' }
 const admin = (await call('profilSaya', {}, ADM)).data;
 
 console.log('Versi');
-ok('versi 2.5.0-CBT', (await call('ping')).data.versi === '2.5.0-CBT');
+ok('versi 2.6.0-CBT', (await call('ping')).data.versi === '2.6.0-CBT');
 
 console.log('Impor guru dari Excel');
 let r = await call('importGuru', { rows: [
@@ -71,7 +71,7 @@ ok('kelas yang ia awasi ditandai', r.data.find(u => u.id === U.id).awasi.join() 
 
 console.log('Monitoring = kelas yang diawasi (bukan mapel)');
 r = await call('listUjian', { untuk: 'monitor' }, GA);
-ok('daftar monitoring A: ujian yang ia awasi (termasuk besok), bukan ujian lain', r.data.map(u => u.nama).sort().join() === 'Besok,PAS Kimia X', r.data.map(u => u.nama));
+ok('daftar monitoring A: hanya ujian berlangsung yang ia awasi (jadwal besok tidak tampil)', r.data.map(u => u.nama).join() === 'PAS Kimia X', r.data.map(u => u.nama));
 r = await call('listUjian', { untuk: 'monitor' }, GP);
 ok('guru pemilik soal yang bukan pengawas: daftar monitoring kosong', r.data.length === 0, r.data);
 r = await call('listUjian', { untuk: 'hasil' }, GP);
@@ -108,6 +108,21 @@ const putus = await mA.tunggu(m => m.t === 'err' && m.k === 'pantau', 5000);
 ok('monitor A ditutup: bukan pengawas lagi', r.ok && putus && /tidak lagi menjadi pengawas/.test(putus.msg), [r, putus]);
 r = await call('monitorUjian', { ujianId: U.id }, GA); ok('A tidak lagi bisa memantau', !r.ok, r);
 mA.close();
+
+console.log('Pilihan pengawas: tanpa admin, tanpa bentrok mapel sama tingkat lain');
+r = await call('saveBank', { bank: { judul: 'Kimia XI', mapel: 'Kimia', tingkat: 'XI', soal: [{ tipe: 'pg', teks: 'a?', bobot: 1, opsi: [{ teks: 'a' }, { teks: 'b' }], kunci: '' }] } }, GP);
+const bankXI = r.data.bank; bankXI.soal[0].kunci = bankXI.soal[0].opsi[0].id; await call('saveBank', { bank: bankXI }, GP);
+r = await call('saveUjian', { nama: 'Kimia XI', bankId: bankXI.id, kelas: ['XI-1'], mulai: t0 + 3600000, selesai: t0 + 7200000, durasi: 30, pengawas: [{ id: gB.id, kelas: [] }] }, ADM);
+ok('guru yang sudah mengawasi Kimia X ditolak untuk Kimia XI', !r.ok && /sudah menjadi pengawas Kimia tingkat X/.test(r.error), r);
+r = await call('saveUjian', { nama: 'Kimia XI', bankId: bankXI.id, kelas: ['XI-1'], mulai: t0 + 3600000, selesai: t0 + 7200000, durasi: 30, pengawas: [{ id: gP.id, kelas: [] }, { id: admin.id, kelas: [] }] }, ADM);
+ok('guru lain diterima; akun admin tidak ikut jadi pengawas', r.ok && r.data.pengawas.length === 1 && r.data.pengawas[0].id === gP.id, r);
+const UXI = r.data;
+r = await call('saveUjian', { nama: 'Kimia X susulan', bankId: bank.id, kelas: ['X-1'], mulai: t0 + 3600000, selesai: t0 + 7200000, durasi: 30, pengawas: [{ id: gB.id, kelas: [] }] }, ADM);
+ok('mapel sama dan tingkat sama tetap boleh', r.ok, r);
+const Ususulan = r.data;
+r = await call('saveUjian', { ...UXI, nama: 'Kimia XI (ubah)' }, ADM);
+ok('mengubah jadwal yang pengawasnya sudah ada tidak ditolak', r.ok, r);
+await call('deleteUjian', { id: UXI.id, paksa: true, hapusHasil: true }, ADM); await call('deleteUjian', { id: Ususulan.id, paksa: true, hapusHasil: true }, ADM);
 
 console.log('Beranda guru');
 r = await call('dashboard', {}, GB);

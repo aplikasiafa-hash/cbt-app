@@ -779,12 +779,12 @@ table.tbl{width:100%;border-collapse:collapse}
         <div class="modal-head"><h2>{{ f.id ? 'Ubah jadwal' : 'Jadwal ujian baru' }}</h2><button type="button" class="x" @click="f=null">×</button></div>
         <div class="modal-body">
           <div class="grid2">
-            <label class="field"><span>Nama ujian</span><input v-model="f.nama" required placeholder="Contoh: PAS Ganjil Matematika X" v-focus></label>
             <label class="field"><span>Bank soal</span>
-              <select v-model="f.bankId" required @change="pilihBank">
+              <select v-model="f.bankId" required @change="pilihBank" v-focus>
                 <option value="" disabled>— pilih bank soal —</option>
                 <optgroup v-for="g in bankGroup" :key="g.mapel" :label="g.mapel"><option v-for="b in g.list" :key="b.id" :value="b.id">{{ b.judul }} ({{ b.jumlahSoal }} soal, {{ b.tingkat }})</option></optgroup>
               </select></label>
+            <label class="field"><span>Nama ujian</span><input v-model="f.nama" required :placeholder="f.bankId ? 'Nama ujian' : 'Otomatis dari judul bank soal'"><small>Diambil dari judul bank soal guru. Ubah bila perlu.</small></label>
           </div>
           <div class="field"><span>Kelas peserta</span>
             <div class="row" style="gap:8px">
@@ -799,8 +799,8 @@ table.tbl{width:100%;border-collapse:collapse}
             </div>
           </div>
           <div class="field"><span>Nama pengawas</span>
-            <pengawas-input v-model="f.pengawas" :guru="guru" :kelas="f.kelas"></pengawas-input>
-            <small>Guru yang dipilih hanya bisa memantau kelas yang ia awasi di menu Monitoring.</small>
+            <pengawas-input v-model="f.pengawas" :guru="guru" :kelas="f.kelas" :tolak="pengawasBentrok"></pengawas-input>
+            <small>Guru yang dipilih hanya bisa memantau kelas yang ia awasi di menu Monitoring.<template v-if="pengawasBentrok.size">{{ ' ' + pengawasBentrok.size }} guru tidak tampil di daftar karena sudah mengawasi ujian {{ mapelForm }} tingkat lain.</template></small>
           </div>
           <div class="grid3">
             <label class="field"><span>Dibuka</span><input type="datetime-local" v-model="f.mulaiStr" required></label>
@@ -844,7 +844,7 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-monitor">
   <div class="page">
     <template v-if="!S.route.id">
-      <div class="page-head"><div><h1>Monitoring</h1><p>{{ S.user.role==='admin' ? 'Pilih ujian untuk memantau peserta secara langsung.' : 'Ujian yang Anda awasi. Anda hanya melihat siswa di kelas yang Anda awasi.' }}</p></div></div>
+      <div class="page-head"><div><h1>Monitoring</h1><p>{{ S.user.role==='admin' ? 'Ujian yang sedang berlangsung.' : 'Ujian yang sedang berlangsung dan Anda awasi. Anda hanya melihat siswa di kelas yang Anda awasi.' }}</p></div></div>
       <pilih-ujian tujuan="monitor"></pilih-ujian>
     </template>
     <template v-else>
@@ -909,7 +909,7 @@ table.tbl{width:100%;border-collapse:collapse}
           <div><a href="#/hasil" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ d.bank ? d.bank.judul : '' }} · {{ fmtTgl(d.ujian.mulai) }}</p></div>
           <div class="row">
             <button class="btn" @click="hitungUlang" title="Pakai kunci jawaban terbaru di bank soal" v-if="lihatNilai">Hitung ulang nilai</button>
-            <button class="btn" @click="sinkron" title="Simpan semua hasil terbaru ke database (dan cadangan GitHub bila diatur)">Simpan sekarang</button>
+            <button class="btn" @click="sinkron" title="Simpan semua hasil terbaru ke serverC (dan serverB bila diatur)">Simpan sekarang</button>
             <button class="btn btn-primary" @click="unduh" :disabled="lihatNilai ? !selesai.length : !d.peserta.length">Unduh Excel</button>
           </div>
         </div>
@@ -1175,7 +1175,11 @@ table.tbl{width:100%;border-collapse:collapse}
 <script type="text/x-template" id="t-pengaturan">
   <div class="page">
     <div class="page-head"><div><h1>Pengaturan</h1><p>Identitas sekolah, tingkat, kelas, dan mata pelajaran.</p></div>
-      <button class="btn btn-primary" @click="simpan" :disabled="sibuk">{{ sibuk ? 'Menyimpan…' : 'Simpan pengaturan' }}</button></div>
+      <div class="row">
+        <button class="btn" @click="unduhExcel">Unduh Excel</button>
+        <button class="btn" @click="imp={data:null,mode:'gabung'}">Impor</button>
+        <button class="btn btn-primary" @click="simpan" :disabled="sibuk">{{ sibuk ? 'Menyimpan…' : 'Simpan pengaturan' }}</button>
+      </div></div>
     <div class="panel panel-pad">
       <h3 style="margin-bottom:12px">Identitas</h3>
       <div class="grid2">
@@ -1203,18 +1207,40 @@ table.tbl{width:100%;border-collapse:collapse}
     </div>
     <div class="panel panel-pad">
       <h3 style="margin-bottom:4px">Sistem & cadangan</h3>
-      <p class="muted small" style="margin-bottom:12px;max-width:75ch">Server: Cloudflare (paket gratis). Jawaban siswa tersimpan di perangkat, dikirim ke server lewat koneksi langsung, dan hasil akhir disimpan di database Cloudflare D1. Bila repo GitHub data diatur, soal dan hasil dicadangkan otomatis maksimal tiap 30 menit.</p>
+      <p class="muted small" style="margin-bottom:12px;max-width:75ch">Jawaban siswa tersimpan di perangkat lalu dikirim ke serverC.<template v-if="st && st.adaB"> Setiap ada perubahan, data dikirim ke serverB (±2 menit setelah perubahan terakhir; selama ujian berlangsung ditunda sampai ujian selesai). Data hari-hari sebelumnya dibaca dari serverB, data hari ini dari serverC.</template><template v-else-if="st"> serverB belum diatur.</template></p>
       <table class="tbl" v-if="st" style="max-width:560px;margin-bottom:14px"><tbody>
-        <tr v-if="st.dataRepo"><td>Cadangan terakhir</td><td>{{ st.cadanganTerakhir ? fmtWaktu(st.cadanganTerakhir) : 'belum pernah' }}<span v-if="st.antrianCadangan" class="muted"> · {{ st.antrianCadangan }} menunggu</span></td></tr>
+        <tr v-if="st.adaB"><td>Terakhir dikirim ke serverB</td><td>{{ st.cadanganTerakhir ? fmtWaktu(st.cadanganTerakhir) : 'belum pernah' }}<span v-if="st.antrianCadangan" class="muted"> · {{ st.antrianCadangan }} perubahan menunggu dikirim</span><span v-else class="muted"> · semua perubahan sudah terkirim</span></td></tr>
         <tr v-if="st.ukuranDb"><td>Ukuran database</td><td :style="st.ukuranDb > st.batasDb * 0.8 ? 'color:var(--merah,#c0392b)' : ''">{{ (st.ukuranDb / 1048576).toFixed(1) }} MB dari {{ Math.round(st.batasDb / 1048576) }} MB ({{ (st.ukuranDb / st.batasDb * 100).toFixed(1) }}%)<span v-if="st.ukuranDb > st.batasDb * 0.8" class="small"><br>Hampir penuh: unduh Excel hasil ujian lama, lalu hapus jadwal tersebut beserta hasilnya (menu Jadwal ujian).</span></td></tr>
-        <tr v-if="st.cadanganGagal"><td>Cadangan gagal</td><td style="color:var(--merah,#c0392b)">{{ fmtWaktu(st.cadanganGagal.t) }} — {{ st.cadanganGagal.pesan }}<br><span class="muted small">Periksa token GitHub (lihat PASANG-TOKEN-GITHUB.md), lalu tekan tombol di bawah.</span></td></tr>
+        <tr v-if="st.cadanganGagal"><td>Gagal dikirim</td><td style="color:var(--merah,#c0392b)">{{ fmtWaktu(st.cadanganGagal.t) }} — {{ st.cadanganGagal.pesan }}<br><span class="muted small">Periksa token serverB, lalu tekan tombol di bawah.</span></td></tr>
       </tbody></table>
       <div class="row" style="gap:8px">
-        <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Menyimpan…' : (st && st.dataRepo ? 'Simpan & cadangkan ke GitHub sekarang' : 'Simpan semua hasil sekarang') }}</button>
-        <button class="btn" @click="impor" :disabled="sibukSync" v-if="st && st.dataRepo">Impor data dari GitHub…</button>
-        <button class="btn" @click="muatUlangData" :disabled="sibukSync" title="Hanya perlu bila data di D1 diubah di luar aplikasi">Muat ulang data dari database</button>
+        <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Mengirim…' : (st && st.adaB ? 'Kirim ke serverB sekarang' : 'Simpan semua hasil sekarang') }}</button>
+        <button class="btn" @click="impor" :disabled="sibukSync" v-if="st && st.adaB">Impor data dari serverB…</button>
+        <button class="btn" @click="muatUlangData" :disabled="sibukSync" title="Hanya perlu bila data di serverC diubah di luar aplikasi">Muat ulang data dari serverC</button>
       </div>
       <p class="small muted" style="margin-top:12px" v-if="versi">Versi {{ versi }}</p>
+    </div>
+
+    <div class="modal-bg" v-if="imp" @click.self="imp=null">
+      <div class="modal lebar">
+        <div class="modal-head"><div><h2>Impor pengaturan</h2><p class="muted small">Unggah file Excel dengan lembar <b>Identitas</b>, <b>Tingkat</b>, <b>Kelas</b> (Nama kelas, Tingkat), dan <b>Mata pelajaran</b> — sama dengan file <i>Unduh Excel</i>. Lembar yang tidak ada dilewati.</p></div><button class="x" @click="imp=null">×</button></div>
+        <div class="modal-body">
+          <input type="file" accept=".xlsx,.xls" @change="bacaImpor">
+          <template v-if="imp.data">
+            <table class="tbl" style="border:1px solid var(--garis-2);margin-top:14px"><tbody>
+              <tr v-if="imp.data.identitas"><td>Identitas</td><td>{{ [imp.data.identitas.namaSekolah, imp.data.identitas.tahunAjaran, imp.data.identitas.semester].filter(Boolean).join(' · ') || '—' }}</td></tr>
+              <tr v-if="imp.data.tingkat"><td>Tingkat</td><td>{{ imp.data.tingkat.join(', ') || '—' }}</td></tr>
+              <tr v-if="imp.data.kelas"><td>Kelas</td><td><b>{{ imp.data.kelas.length }}</b> kelas<span class="muted" v-if="hitungBaru.kelas"> ({{ hitungBaru.kelas }} baru)</span>: {{ imp.data.kelas.slice(0, 12).map(k => k.nama).join(', ') }}{{ imp.data.kelas.length > 12 ? ', …' : '' }}</td></tr>
+              <tr v-if="imp.data.mapel"><td>Mata pelajaran</td><td><b>{{ imp.data.mapel.length }}</b> mapel<span class="muted" v-if="hitungBaru.mapel"> ({{ hitungBaru.mapel }} baru)</span>: {{ imp.data.mapel.slice(0, 10).join(', ') }}{{ imp.data.mapel.length > 10 ? ', …' : '' }}</td></tr>
+            </tbody></table>
+            <div style="margin-top:14px">
+              <label class="check"><input type="radio" value="gabung" v-model="imp.mode"><span><b>Tambahkan</b> — tingkat, kelas, dan mapel baru ditambahkan; yang sudah ada tetap (tingkat kelas diperbarui)</span></label>
+              <label class="check"><input type="radio" value="ganti" v-model="imp.mode"><span><b>Ganti</b> — daftar tingkat, kelas, dan mapel diganti persis dengan isi file</span></label>
+            </div>
+          </template>
+        </div>
+        <div class="modal-foot"><button class="btn" @click="imp=null">Batal</button><button class="btn btn-primary" :disabled="!imp.data || sibuk" @click="terapkanImpor">{{ sibuk ? 'Menyimpan…' : 'Impor & simpan' }}</button></div>
+      </div>
     </div>
   </div>
 </script>
@@ -1286,9 +1312,9 @@ table.tbl{width:100%;border-collapse:collapse}
 <script>
 /* =====================================================================
    PENGATURAN
-   Bila aplikasi ini dibuka dari alamat Cloudflare yang sama (…workers.dev/guru/), biarkan '/api'.
-   Bila di-hosting di tempat lain (mis. GitHub Pages), isi alamat lengkap, contoh:
-   const API_URL = 'https://cbt-sekolah.namaakun.workers.dev/api';
+   Bila aplikasi ini dibuka dari alamat server yang sama (…/guru/), biarkan '/api'.
+   Bila di-hosting di tempat lain, isi alamat lengkap server, contoh:
+   const API_URL = 'https://alamat-server-anda/api';
    ===================================================================== */
 const API_URL = window.CBT_API_URL || '/api';
 const WS_URL = (() => {
@@ -1358,7 +1384,7 @@ function tanya(judul, teks, o = {}) {
 /* ---------- API ---------- */
 /* =====================================================================
    KONEKSI TUNGGAL (WebSocket): semua aksi lewat SATU koneksi yang dibuka
-   sekali. 1 kali buka aplikasi = 1 request kuota Cloudflare. Bila koneksi
+   sekali. 1 kali buka aplikasi = 1 request kuota server. Bila koneksi
    ini tidak tersedia, aplikasi otomatis memakai HTTP biasa.
    ===================================================================== */
 const Sok = {
@@ -1425,7 +1451,7 @@ const Sok = {
     });
   }
 };
-const AKSI_LAMA = new Set(['imporGithub', 'importSiswa', 'importGuru', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+const AKSI_LAMA = new Set(['imporCadangan', 'importSiswa', 'importGuru', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
 /** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
 async function apiSok(action, data, tok, onAuth) {
   if (!Sok.tersedia()) return null;
@@ -1451,7 +1477,7 @@ async function api(action, data = {}, opt = {}) {
   for (let i = 0; i <= maks; i++) {
     try {
       const res = await fetch(API_URL + '?a=' + encodeURIComponent(action), { method: 'POST', body, headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
-      if (res.status === 429 && !/json/.test(res.headers.get('content-type') || '')) throw Object.assign(new Error('Kuota harian Cloudflare (100.000 permintaan) sudah habis. Pulih pukul 08.00 WITA.'), { code: 'KUOTA' });
+      if (res.status === 429 && !/json/.test(res.headers.get('content-type') || '')) throw Object.assign(new Error('Kuota harian serverC sudah habis. Pulih pukul 08.00 WITA.'), { code: 'KUOTA' });
       const j = await res.json();
       if (j.serverTime) S.offset = j.serverTime - Date.now();
       if (j.ok) return j.data;
@@ -1672,10 +1698,11 @@ app.component('chips-input', {
 // Pengawas ujian: pilih guru seperti isian mata pelajaran (ketik lalu Enter / pilih dari daftar),
 // lalu (bila kelas peserta lebih dari satu) tandai kelas yang diawasi tiap pengawas. Kosong = semua kelas.
 app.component('pengawas-input', {
-  props: ['modelValue', 'guru', 'kelas'], emits: ['update:modelValue'], template: '#t-pengawas-input',
+  props: ['modelValue', 'guru', 'kelas', 'tolak'], emits: ['update:modelValue'], template: '#t-pengawas-input',
   data: () => ({ baru: '', uid: ++chipUid }),
   computed: {
-    pilihan() { const ada = new Set(this.modelValue.map(p => p.id)); return (this.guru || []).filter(g => g.aktif && !ada.has(g.id)).sort((a, b) => a.nama.localeCompare(b.nama)); }
+    // tanpa admin, tanpa guru nonaktif, tanpa guru yang sudah mengawasi mapel sama di tingkat lain
+    pilihan() { const ada = new Set(this.modelValue.map(p => p.id)); return (this.guru || []).filter(g => g.aktif && g.role !== 'admin' && !ada.has(g.id) && !(this.tolak && this.tolak.has(g.id))).sort((a, b) => a.nama.localeCompare(b.nama)); }
   },
   methods: {
     label(g) { return g.nama + ' (' + g.username + ')'; },
@@ -1691,7 +1718,7 @@ app.component('pengawas-input', {
     tambah(diam) {
       const v = this.baru.replace(/,$/, ''); if (!v.trim()) { this.baru = ''; return; }
       const g = this.cari(v);
-      if (!g) { if (!diam) toast('Guru “' + v.trim() + '” tidak ditemukan. Pilih dari daftar.', 'err'); return; }
+      if (!g) { if (!diam) toast('Guru “' + v.trim() + '” tidak ada di daftar pengawas. Pilih dari daftar.', 'err'); return; }
       this.baru = '';
       this.$emit('update:modelValue', [...this.modelValue, { id: g.id, nama: g.nama, kelas: [] }]);
     },
@@ -1929,7 +1956,19 @@ app.component('v-jadwal', {
     hariIni() { return new Date(sekarang()).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); },
     tampil() { const q = this.q.toLowerCase(); return (this.list || []).filter(u => (!q || u.nama.toLowerCase().includes(q)) && (!this.fStatus || u.status === this.fStatus)); },
     bankGroup() { const g = {}; this.bank.forEach(b => (g[b.mapel || 'Lainnya'] = g[b.mapel || 'Lainnya'] || []).push(b)); return Object.keys(g).sort().map(m => ({ mapel: m, list: g[m] })); },
-    kelasTampil() { return (S.config.kelas || []).filter(k => !this.f.tingkat || k.tingkat === this.f.tingkat); }
+    kelasTampil() { return (S.config.kelas || []).filter(k => !this.f.tingkat || k.tingkat === this.f.tingkat); },
+    bankForm() { return this.f && this.bank.find(b => b.id === this.f.bankId); },
+    mapelForm() { return this.bankForm ? this.bankForm.mapel : ''; },
+    /** Guru yang sudah mengawasi ujian bermapel sama di tingkat lain (ujian yang belum berakhir) → tidak ditawarkan. */
+    pengawasBentrok() {
+      const m = new Map(), b = this.bankForm; if (!b || !this.list) return m;
+      const kecil = v => String(v || '').trim().toLowerCase(), mapel = kecil(b.mapel), tingkat = kecil(this.f.tingkat || b.tingkat), t = sekarang();
+      for (const u of this.list) {
+        if (u.id === this.f.id || u.selesai < t || kecil(u.mapel) !== mapel || kecil(u.tingkat) === tingkat) continue;
+        (u.pengawas || []).forEach(p => { if (!m.has(p.id)) m.set(p.id, u); });
+      }
+      return m;
+    }
   },
   mounted() {
     this.muat();
@@ -1944,13 +1983,18 @@ app.component('v-jadwal', {
     bukaForm(u, salin) {
       if (u) {
         this.f = { ...u, kelas: [...u.kelas], pengawas: (u.pengawas || []).map(p => ({ id: p.id, nama: p.nama, kelas: [...(p.kelas || [])] })), mulaiStr: keInput(u.mulai), selesaiStr: keInput(u.selesai) };
-        if (salin) { this.f.id = ''; this.f.nama = u.nama + ' (salinan)'; }
+        if (salin) { this.f.id = ''; this.f.nama = u.nama + ' (salinan)'; this.f.pengawas = []; }
       } else {
         const m = new Date(sekarang() + 86400000); m.setHours(7, 30, 0, 0);
         this.f = { id: '', nama: '', bankId: '', tingkat: '', kelas: [], mulaiStr: keInput(m.getTime()), selesaiStr: keInput(m.getTime() + 2 * 3600000), durasi: 90, acakSoal: true, acakOpsi: true, tampilNilai: false, pakaiToken: true, maxPelanggaran: 3, aktif: true, keterangan: '', pengawas: [] };
       }
     },
-    pilihBank() { const b = this.bank.find(x => x.id === this.f.bankId); if (b && !this.f.tingkat) this.f.tingkat = b.tingkat; if (b && !this.f.nama) this.f.nama = b.judul; },
+    // nama ujian mengikuti judul bank soal (dari guru); admin tetap bisa mengubahnya
+    pilihBank() {
+      const b = this.bank.find(x => x.id === this.f.bankId); if (!b) return;
+      if (!this.f.tingkat || this.f.tingkat === this.f.tingkatOtomatis) this.f.tingkat = this.f.tingkatOtomatis = b.tingkat;
+      if (!this.f.nama.trim() || this.f.nama === this.f.namaOtomatis) this.f.nama = this.f.namaOtomatis = b.judul;
+    },
     pilihSemuaKelas(v) { const nm = this.kelasTampil.map(k => k.nama); this.f.kelas = v ? [...new Set([...this.f.kelas, ...nm])] : this.f.kelas.filter(k => !nm.includes(k)); },
     async simpan() {
       const mulai = dariInput(this.f.mulaiStr), selesai = dariInput(this.f.selesaiStr);
@@ -1964,7 +2008,7 @@ app.component('v-jadwal', {
     },
     async hapus(u) {
       if (!await tanya('Hapus jadwal?', `Jadwal “${u.nama}” akan dihapus.`, { ok: 'Hapus', bahaya: true })) return;
-      const hapusHasil = await tanya('Hapus juga hasilnya?', 'Hasil ujian ini ikut dihapus dari database untuk mengosongkan ruang (batas paket gratis 500 MB). Unduh Excel di menu Hasil dulu bila masih diperlukan. Cadangan di GitHub (cbt-data) tidak ikut terhapus.', { ok: 'Hapus hasilnya juga', batal: 'Simpan hasilnya', bahaya: true });
+      const hapusHasil = await tanya('Hapus juga hasilnya?', 'Hasil ujian ini ikut dihapus dari serverC untuk mengosongkan ruang (batas 500 MB). Unduh Excel di menu Hasil dulu bila masih diperlukan. Salinan di serverB tidak ikut terhapus.', { ok: 'Hapus hasilnya juga', batal: 'Simpan hasilnya', bahaya: true });
       try { await api('deleteUjian', { id: u.id, hapusHasil }); }
       catch (e) {
         if (e.code !== 'ADA_PESERTA') return toast(e.message, 'err');
@@ -1980,14 +2024,16 @@ app.component('pilih-ujian', {
   props: ['tujuan'], template: '#t-pilih-ujian', data: () => ({ list: null }),
   computed: {
     kosong() {
-      if (S.user.role === 'admin') return ['Belum ada jadwal ujian', 'Ujian muncul di sini setelah dijadwalkan.'];
-      return this.tujuan === 'monitor' ? ['Anda belum ditugaskan sebagai pengawas', 'Admin menetapkan pengawas setiap ujian di menu Jadwal ujian.'] : ['Belum ada ujian dari bank soal Anda', 'Hasil muncul di sini setelah admin menjadwalkan bank soal Anda.'];
+      if (S.user.role === 'admin') return this.tujuan === 'monitor' ? ['Tidak ada ujian yang sedang berlangsung', 'Ujian lain bisa dipantau dari menu Jadwal ujian (tombol Pantau).'] : ['Belum ada jadwal ujian', 'Ujian muncul di sini setelah dijadwalkan.'];
+      if (this.tujuan === 'monitor') return ['Tidak ada ujian yang sedang berlangsung', 'Ujian yang Anda awasi tampil di sini selama berlangsung.'];
+      return ['Belum ada ujian dari bank soal Anda', 'Hasil muncul di sini setelah admin menjadwalkan bank soal Anda.'];
     }
   },
   async mounted() {
     try {
       const urut = { berlangsung: 0, akan: 1, selesai: 2, nonaktif: 3 };
-      this.list = (await api('listUjian', { untuk: this.tujuan })).sort((a, b) => (urut[a.status] - urut[b.status]) || (a.status === 'selesai' ? b.mulai - a.mulai : a.mulai - b.mulai));
+      // Monitoring: hanya ujian yang sedang berlangsung
+      this.list = (await api('listUjian', { untuk: this.tujuan })).filter(u => this.tujuan !== 'monitor' || u.status === 'berlangsung').sort((a, b) => (urut[a.status] - urut[b.status]) || (a.status === 'selesai' ? b.mulai - a.mulai : a.mulai - b.mulai));
     } catch (e) { toast(e.message, 'err'); this.list = []; }
   }
 });
@@ -2316,7 +2362,14 @@ app.component('v-guru', {
 
 app.component('v-pengaturan', {
   template: '#t-pengaturan',
-  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), sibuk: false, sibukSync: false, versi: '', st: null }),
+  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), sibuk: false, sibukSync: false, versi: '', st: null, imp: null }),
+  computed: {
+    hitungBaru() {
+      const d = this.imp && this.imp.data; if (!d) return {};
+      const k = new Set((this.c.kelas || []).map(x => x.nama.toLowerCase())), m = new Set((this.c.mapel || []).map(x => x.toLowerCase()));
+      return { kelas: (d.kelas || []).filter(x => !k.has(x.nama.toLowerCase())).length, mapel: (d.mapel || []).filter(x => !m.has(x.toLowerCase())).length };
+    }
+  },
   async mounted() {
     try { this.c = await api('getConfig'); } catch (e) {}
     this.c.tingkat = this.c.tingkat || []; this.c.kelas = this.c.kelas || []; this.c.mapel = this.c.mapel || [];
@@ -2326,11 +2379,71 @@ app.component('v-pengaturan', {
   methods: {
     async simpan() {
       this.sibuk = true;
-      try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); toast('Pengaturan tersimpan'); }
-      catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
+      try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); toast('Pengaturan tersimpan'); return true; }
+      catch (e) { toast(e.message, 'err'); return false; } finally { this.sibuk = false; }
+    },
+    async unduhExcel() {
+      try {
+        const X = await muatXLSX(), wb = X.utils.book_new(), c = this.c;
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Data', 'Isi'], ['Nama sekolah', c.namaSekolah || ''], ['Tahun ajaran', c.tahunAjaran || ''], ['Semester', c.semester || ''], ['URL logo', c.logo || '']]), 'Identitas');
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Tingkat'], ...(c.tingkat || []).map(t => [t])]), 'Tingkat');
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Nama kelas', 'Tingkat'], ...(c.kelas || []).map(k => [k.nama, k.tingkat || ''])]), 'Kelas');
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Mata pelajaran'], ...(c.mapel || []).map(m => [m])]), 'Mata pelajaran');
+        X.writeFile(wb, 'Pengaturan_' + namaFile(c.namaSekolah || 'sekolah') + '.xlsx');
+      } catch (e) { toast(e.message, 'err'); }
+    },
+    /** Baca lembar Identitas / Tingkat / Kelas / Mata pelajaran (nama lembar atau judul kolom). */
+    async bacaImpor(e) {
+      const f = e.target.files[0]; if (!f) return;
+      try {
+        const X = await muatXLSX(), wb = X.read(await f.arrayBuffer(), { type: 'array' });
+        const norm = v => String(v ?? '').trim(), kunci = v => norm(v).toLowerCase().replace(/[^a-z]/g, '');
+        const data = {};
+        for (const nm of wb.SheetNames) {
+          const rows = X.utils.sheet_to_json(wb.Sheets[nm], { header: 1, raw: false, defval: '' }).filter(r => r.some(x => norm(x)));
+          if (!rows.length) continue;
+          const n = kunci(nm), h = rows[0].map(kunci);
+          const isi = rows.slice(1);
+          if (n.includes('identitas') || (h[0] === 'data' && h[1] === 'isi')) {
+            const id = {};
+            (h[0] === 'data' ? isi : rows).forEach(r => {
+              const k = kunci(r[0]), v = norm(r[1]);
+              if (k === 'namasekolah') id.namaSekolah = v; else if (k === 'tahunajaran') id.tahunAjaran = v;
+              else if (k === 'semester') id.semester = /genap/i.test(v) ? 'Genap' : (v ? 'Ganjil' : ''); else if (k === 'urllogo' || k === 'logo') id.logo = v;
+            });
+            data.identitas = id;
+          } else if (n.includes('kelas') || h.includes('namakelas') || h[0] === 'kelas') {
+            const iN = Math.max(0, h.findIndex(x => x === 'namakelas' || x === 'kelas')), iT = h.findIndex(x => x === 'tingkat');
+            const ada = new Set();
+            data.kelas = isi.map(r => ({ nama: norm(r[iN]), tingkat: iT >= 0 ? norm(r[iT]) : '' })).filter(k => k.nama && !ada.has(k.nama.toLowerCase()) && ada.add(k.nama.toLowerCase()));
+          } else if (n.includes('mata') || n.includes('mapel') || h[0] === 'matapelajaran' || h[0] === 'mapel') {
+            data.mapel = [...new Set(isi.map(r => norm(r[0])).filter(Boolean))];
+          } else if (n.includes('tingkat') || h[0] === 'tingkat') {
+            data.tingkat = [...new Set(isi.map(r => norm(r[0])).filter(Boolean))];
+          }
+        }
+        if (!data.identitas && !data.kelas && !data.mapel && !data.tingkat) return toast('Tidak ada lembar Identitas, Tingkat, Kelas, atau Mata pelajaran di file ini.', 'err');
+        this.imp.data = data;
+      } catch (err) { toast(err.message, 'err'); }
+    },
+    async terapkanImpor() {
+      const d = this.imp.data, c = JSON.parse(JSON.stringify(this.c)), ganti = this.imp.mode === 'ganti';
+      if (d.identitas) Object.keys(d.identitas).forEach(k => { if (d.identitas[k]) c[k] = d.identitas[k]; });
+      const tambahUnik = (lama, baru) => { const a = [...lama]; baru.forEach(x => { if (!a.some(y => y.toLowerCase() === x.toLowerCase())) a.push(x); }); return a; };
+      if (d.tingkat) c.tingkat = ganti ? d.tingkat : tambahUnik(c.tingkat || [], d.tingkat);
+      if (d.kelas) {
+        if (ganti) c.kelas = d.kelas.map(k => ({ ...k }));
+        else d.kelas.forEach(k => { const x = c.kelas.find(y => y.nama.toLowerCase() === k.nama.toLowerCase()); if (x) { if (k.tingkat) x.tingkat = k.tingkat; } else c.kelas.push({ ...k }); });
+        c.tingkat = tambahUnik(c.tingkat || [], c.kelas.map(k => k.tingkat).filter(Boolean));
+        c.kelas.sort((a, b) => a.nama.localeCompare(b.nama, 'id', { numeric: true }));
+      }
+      if (d.mapel) c.mapel = ganti ? d.mapel : tambahUnik(c.mapel || [], d.mapel);
+      if (ganti && !await tanya('Ganti daftar pengaturan?', 'Daftar tingkat, kelas, dan mata pelajaran diganti persis dengan isi file. Kelas atau mapel yang tidak ada di file akan hilang dari pengaturan (data siswa & bank soal tidak terhapus).', { ok: 'Ganti', bahaya: true })) return;
+      const lama = this.c; this.c = c;
+      if (await this.simpan()) this.imp = null; else this.c = lama;
     },
     async muatUlangData() {
-      if (!await tanya('Muat ulang data?', 'Data guru, bank soal, jadwal, dan pengaturan dibaca ulang dari database D1. Hanya perlu bila data di D1 diubah di luar aplikasi.', { ok: 'Muat ulang' })) return;
+      if (!await tanya('Muat ulang data?', 'Data guru, bank soal, jadwal, dan pengaturan dibaca ulang dari serverC. Hanya perlu bila data di serverC diubah di luar aplikasi.', { ok: 'Muat ulang' })) return;
       try { const r = await api('muatUlangData'); toast(`Dimuat ulang: ${r.guru} guru, ${r.bank} bank soal, ${r.ujian} jadwal`); this.muatStatus && this.muatStatus(); } catch (e) { toast(e.message, 'err'); }
     },
     muatStatus() { api('statusSistem').then(r => this.st = r).catch(() => {}); },
@@ -2340,10 +2453,10 @@ app.component('v-pengaturan', {
       catch (e) { toast(e.message, 'err'); } finally { this.sibukSync = false; }
     },
     async impor() {
-      if (!await tanya('Impor dari GitHub?', 'Data di repo ' + this.st.dataRepo + ' (pengaturan, guru, siswa, bank soal, jadwal, hasil) akan dimasukkan ke database Cloudflare. Data dengan ID sama akan ditimpa. Pakai ini untuk memindahkan data dari versi Apps Script. Jangan lakukan saat ujian berlangsung.', { ok: 'Impor sekarang', bahaya: true })) return;
+      if (!await tanya('Impor dari serverB?', 'Data di serverB (pengaturan, guru, siswa, bank soal, jadwal, hasil) akan dimasukkan ke serverC. Data dengan ID sama akan ditimpa. Pakai ini untuk memindahkan data dari versi lama. Jangan lakukan saat ujian berlangsung.', { ok: 'Impor sekarang', bahaya: true })) return;
       this.sibukSync = true;
       try {
-        const n = await api('imporGithub', {}, { retry: 0 });
+        const n = await api('imporCadangan', {}, { retry: 0 });
         toast(`Diimpor: ${n.guru} guru, ${n.siswa} siswa, ${n.bank} bank soal, ${n.ujian} jadwal, ${n.hasil} hasil`, 'ok', 8000);
         S.config = await api('getConfig'); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config));
       } catch (e) { toast(e.message, 'err', 8000); } finally { this.sibukSync = false; }
@@ -2351,9 +2464,10 @@ app.component('v-pengaturan', {
   }
 });
 function pesanSinkron(r) {
-  let t = r.disinkron ? r.disinkron + ' hasil disimpan ke database' : 'Semua hasil sudah tersimpan';
-  if (r.cadangan && r.cadangan.error) t += '. Cadangan GitHub gagal: ' + r.cadangan.error;
-  else if (r.cadangan && r.cadangan.berkas) t += ', ' + r.cadangan.berkas + ' berkas dicadangkan ke GitHub';
+  let t = r.disinkron ? r.disinkron + ' hasil disimpan ke serverC' : 'Semua hasil sudah tersimpan';
+  if (r.cadangan && r.cadangan.error) t += '. Gagal dikirim ke serverB: ' + r.cadangan.error;
+  else if (r.cadangan && r.cadangan.berkas) t += ', ' + r.cadangan.berkas + ' berkas dikirim ke serverB';
+  else if (r.adaRepo) t += ', serverB sudah terbaru';
   return t;
 }
 
