@@ -20,7 +20,8 @@
     // HEMAT KUOTA: hanya /api yang membangunkan Worker. Alamat lain (bot pemindai seperti /wp-admin,
     // /.env, dll.) dijawab 404.html oleh lapisan aset tanpa dihitung sebagai request Worker.
     "not_found_handling": "404-page",
-    "run_worker_first": ["/api", "/api/*"]
+    // /ujian-cbt/* lewat Worker agar bisa diperiksa: hanya aplikasi CBT Ujian yang boleh membukanya.
+    "run_worker_first": ["/api", "/api/*", "/ujian-cbt", "/ujian-cbt/*"]
   },
 
   // Database D1 "cbt-sekolah-db". Dibuat OTOMATIS saat pemasangan pertama.

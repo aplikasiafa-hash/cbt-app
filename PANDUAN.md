@@ -155,7 +155,7 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
-## Hak akses (versi 2.7.0-CBT)
+## Hak akses (versi 2.8.0-CBT)
 
 | | Admin | Guru pengawas | Guru pemilik soal | Siswa |
 |---|---|---|---|---|
@@ -188,6 +188,20 @@ GitHub Actions, gratis) dan memasangnya ada di `ExamBrowser/README.md`. Ringkasn
 - Windows: layar penuh & tombol pintas Windows diblokir sejak dibuka; terkunci penuh sejak **Mulai mengerjakan**.
 - Keluar sebelum jawaban terkirim hanya dengan **token keluar** (Monitoring → di bawah token ujian).
 - Jadwal → **Wajib memakai aplikasi CBT Ujian** agar ujian tidak bisa dikerjakan dari browser biasa.
+
+## Halaman ujian hanya untuk aplikasi + sumber teracak
+
+- **`/ujian-cbt/` hanya bisa dibuka lewat aplikasi CBT Ujian** (.apk/.exe). Dibuka di browser mana pun → **404**.
+  Aktif bila rahasia `APP_KUNCI` diatur di Worker **dan** disatukan ke aplikasi (lihat `ExamBrowser-kunci/APP_KUNCI-BACA.md`).
+  Bila `APP_KUNCI` kosong, gerbang mati (halaman terbuka biasa — untuk uji coba). `/guru/` tidak terpengaruh.
+- **Kode halaman diacak.** Berkas yang dilayani (`public/guru/index.html`, `public/ujian-cbt/`) sudah diacak
+  (javascript-obfuscator) dan dibuang komentar/spasinya sehingga sulit dibaca, ditiru, atau diubah.
+  Sumber yang mudah dibaca ada di folder `sumber/`; setelah mengeditnya jalankan `node bina.mjs` untuk membangun
+  ulang berkas di `public/`. (Folder `sumber/` tidak dilayani ke internet, jadi aman disimpan di proyek.)
+
+  Catatan jujur: pengacakan menyulitkan, bukan mustahil — kode teracak masih bisa dianalisis dengan usaha keras,
+  dan tampilan yang sudah tampil di layar selalu bisa dilihat lewat alat pengembang (di aplikasi, alat pengembang
+  dimatikan). Gerbang aplikasi + pengacakan menaikkan palang setinggi mungkin untuk hal yang dijalankan di sisi pengguna.
 
 ## Excel: NISN, NIP, dan password berawalan 0
 

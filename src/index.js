@@ -175,6 +175,19 @@ export default {
       if (req.headers.get('Upgrade') !== 'websocket') return new Response('Butuh WebSocket', { status: 426 });
       return engine(env).fetch(req);
     }
+    // Halaman ujian HANYA boleh dibuka dari aplikasi CBT Ujian (.apk/.exe). Aplikasi menyisipkan
+    // kunci rahasia (APP_KUNCI) ke User-Agent; browser biasa tidak punya → dijawab 404.
+    // Kunci diatur sebagai rahasia Worker (wrangler secret put APP_KUNCI) DAN disatukan ke aplikasi saat dibangun.
+    // Bila APP_KUNCI tidak diatur, gerbang MATI (halaman terbuka seperti biasa) agar tidak mengunci diri sendiri.
+    if (p === '/ujian-cbt' || url.pathname.startsWith('/ujian-cbt/')) {
+      if (env.APP_KUNCI && !(req.headers.get('user-agent') || '').includes('k/' + env.APP_KUNCI)) {
+        let body = 'Tidak ditemukan';
+        try { body = await (await env.ASSETS.fetch(new URL('/404.html', url))).text(); } catch (e) {}
+        return new Response(body, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'vary': 'User-Agent' } });
+      }
+      const r = await env.ASSETS.fetch(req);
+      return new Response(r.body, { status: r.status, headers: { ...Object.fromEntries(r.headers), 'cache-control': 'no-store', 'vary': 'User-Agent' } });
+    }
     if (env.ASSETS) return env.ASSETS.fetch(req);
     return new Response('Tidak ditemukan', { status: 404 });
   },
