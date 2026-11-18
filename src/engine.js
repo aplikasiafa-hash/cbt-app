@@ -24,6 +24,18 @@ const DENYUT_MS = 4000;        // dorong perubahan status ke monitor tiap 4 deti
 const PENDING_MS = 2 * 3600000; // jawaban perangkat tak kunjung datang: dinilai dari cadangan server 2 jam setelah jadwal ditutup
 const ALARM_MS = 60000;        // perawatan saat tidak ada koneksi
 const BACKUP_MS = 30 * 60000;  // cadangan GitHub otomatis maks. tiap 30 menit
+// Salinan data guru/bank/jadwal/pengaturan di penyimpanan internal Durable Object: saat mesin ujian bangun dari tidur
+// tidak perlu membaca D1 (hemat "Rows read"). Dimuat ulang dari D1 sekali setiap versi aplikasi baru.
+const CACHE_VERSI = 'c1:' + X.VERSI;
+
+/** Map yang ikut menyimpan perubahan ke tabel salinan di penyimpanan internal Durable Object. */
+class PetaDO extends Map {
+  constructor(sql, tabel, entri) { super(entri); this.sql = sql; this.tabel = tabel; }
+  set(k, v) { super.set(k, v); if (this.sql) this.sql.exec(`INSERT OR REPLACE INTO ${this.tabel} (id, d) VALUES (?, ?)`, k, JSON.stringify(v)); return this; }
+  delete(k) { const r = super.delete(k); if (this.sql && r) this.sql.exec(`DELETE FROM ${this.tabel} WHERE id = ?`, k); return r; }
+  clear() { super.clear(); if (this.sql) this.sql.exec(`DELETE FROM ${this.tabel}`); }
+  tulisSemua() { this.sql.exec(`DELETE FROM ${this.tabel}`); for (const [k, v] of this) this.sql.exec(`INSERT INTO ${this.tabel} (id, d) VALUES (?, ?)`, k, JSON.stringify(v)); }
+}
 const PUBLIK = new Set(['_dev', 'ping', 'loginSiswa', 'loginGuru']);
 
 const HDR = { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
@@ -64,21 +76,29 @@ function pasangUkur(self) {
   const lipat = n => { for (const c of kursor.splice(0, n)) { u.dor += c.rowsRead; u.dow += c.rowsWritten; } };
   self.sql = { exec: (...a) => { const c = asliSql.exec(...a); u.doq++; kursor.push(c); if (kursor.length > 4000) lipat(2000); return c; } };
   self.ukurBaca = () => { lipat(kursor.length); return { ...u }; };
-  const catat = r => { if (r && r.meta) { u.d1r += r.meta.rows_read || 0; u.d1w += r.meta.rows_written || 0; u.d1q++; } return r; };
-  const asli = new WeakMap();
-  const bungkus = st => {
+  const kueri = self.ukurKueri = {};
+  const catat = (r, sql) => {
+    if (r && r.meta) {
+      u.d1r += r.meta.rows_read || 0; u.d1w += r.meta.rows_written || 0; u.d1q++;
+      const k = String(sql || '?').replace(/\s+/g, ' ').slice(0, 90), q = kueri[k] || (kueri[k] = { n: 0, r: 0, w: 0 });
+      q.n++; q.r += r.meta.rows_read || 0; q.w += r.meta.rows_written || 0;
+    }
+    return r;
+  };
+  const asli = new WeakMap(), sqlNya = new WeakMap();
+  const bungkus = (st, sql) => {
     const p = new Proxy(st, { get(t, k) {
-      if (k === 'bind') return (...a) => bungkus(t.bind(...a));
-      if (k === 'all' || k === 'run') return async (...a) => catat(await t[k](...a));
-      if (k === 'first') return async col => { const r = catat(await t.all()); const row = r.results[0] ?? null; return col ? (row ? row[col] : null) : row; };
+      if (k === 'bind') return (...a) => bungkus(t.bind(...a), sql);
+      if (k === 'all' || k === 'run') return async (...a) => catat(await t[k](...a), sql);
+      if (k === 'first') return async col => { const r = catat(await t.all(), sql); const row = r.results[0] ?? null; return col ? (row ? row[col] : null) : row; };
       const v = t[k]; return typeof v === 'function' ? v.bind(t) : v;
     } });
-    asli.set(p, st); return p;
+    asli.set(p, st); sqlNya.set(p, sql); return p;
   };
   const DB = self.env.DB;
   self.env.DB = new Proxy(DB, { get(t, k) {
-    if (k === 'prepare') return sql => bungkus(t.prepare(sql));
-    if (k === 'batch') return async sts => { const r = await t.batch(sts.map(x => asli.get(x) || x)); r.forEach(catat); return r; };
+    if (k === 'prepare') return sql => bungkus(t.prepare(sql), sql);
+    if (k === 'batch') return async sts => { const r = await t.batch(sts.map(x => asli.get(x) || x)); r.forEach((x, i) => catat(x, sqlNya.get(sts[i]))); return r; };
     const v = t[k]; return typeof v === 'function' ? v.bind(t) : v;
   } });
 }
@@ -109,16 +129,30 @@ export class Engine extends DurableObject {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS p (u TEXT NOT NULL, nis TEXT NOT NULL, d TEXT NOT NULL, PRIMARY KEY (u, nis)) WITHOUT ROWID`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS jw (u TEXT NOT NULL, b INTEGER NOT NULL, d TEXT NOT NULL, PRIMARY KEY (u, b)) WITHOUT ROWID`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
-    this.secret = await siapkanD1(this.env.DB);
-    await this.muatCache();
+    for (const t of ['c_guru', 'c_bank', 'c_ujian', 'c_roster']) this.sql.exec(`CREATE TABLE IF NOT EXISTS ${t} (id TEXT PRIMARY KEY, d TEXT NOT NULL) WITHOUT ROWID`);
+    if (this.metaGet('c_versi') === CACHE_VERSI && this.metaGet('c_secret')) this.muatDariDO();
+    else { this.secret = await siapkanD1(this.env.DB); await this.muatCache(); }
     this.bdirty = new Set(parse_(this.metaGet('bdirty'), []));
     this.lastBackup = Number(this.metaGet('lastBackup') || 0);
     this.cadanganGagal = parse_(this.metaGet('cadanganGagal'), null);
     const ids = [...this.sql.exec(`SELECT DISTINCT u FROM p UNION SELECT DISTINCT u FROM jw`)].map(r => r.u);
     for (const id of ids) await this.getL(id);
     this.alarmAt = (await this.ctx.storage.getAlarm()) || 0;
-    if (this.adaKerja()) await this.pasangAlarm();
+    await this.aturAlarm();
   }
+  /** Bangun dari tidur: semua data dasar dari penyimpanan internal (0 baris D1). */
+  muatDariDO() {
+    const baca = t => [...this.sql.exec(`SELECT id, d FROM ${t}`)].map(r => [r.id, JSON.parse(r.d)]);
+    this.secret = this.metaGet('c_secret');
+    this._config = parse_(this.metaGet('c_config'), null) || { ...X.CONFIG_DEFAULT };
+    this.guru = new PetaDO(this.sql, 'c_guru', baca('c_guru'));
+    this.bankIdx = new PetaDO(this.sql, 'c_bank', baca('c_bank'));
+    this.ujian = new PetaDO(this.sql, 'c_ujian', baca('c_ujian'));
+    this.bankFull.clear();
+    this.jmlSiswa = null; this.roster = null;
+  }
+  get config() { return this._config; }
+  set config(v) { this._config = v; if (this.sql) this.metaSet('c_config', JSON.stringify(v)); }
   async muatCache() {
     const DB = this.env.DB;
     const [c, g, b, u] = await DB.batch([
@@ -128,11 +162,13 @@ export class Engine extends DurableObject {
       DB.prepare(`SELECT data FROM ujian`)
     ]);
     this.config = c.results[0] ? JSON.parse(c.results[0].v) : { ...X.CONFIG_DEFAULT };
-    this.guru = new Map(g.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
-    this.bankIdx = new Map(b.results.map(r => { const x = JSON.parse(r.meta); return [x.id, x]; }));
-    this.ujian = new Map(u.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
+    this.guru = new PetaDO(this.sql, 'c_guru', g.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
+    this.bankIdx = new PetaDO(this.sql, 'c_bank', b.results.map(r => { const x = JSON.parse(r.meta); return [x.id, x]; }));
+    this.ujian = new PetaDO(this.sql, 'c_ujian', u.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
+    this.guru.tulisSemua(); this.bankIdx.tulisSemua(); this.ujian.tulisSemua();
     this.bankFull.clear();
-    this.jmlSiswa = null; this.roster = null;
+    this.lupakanSiswa();
+    this.metaSet('c_secret', this.secret); this.metaSet('c_versi', CACHE_VERSI);
   }
   metaGet(k) { const r = [...this.sql.exec(`SELECT v FROM meta WHERE k = ?`, k)]; return r.length ? r[0].v : null; }
   metaSet(k, v) { this.sql.exec(`INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)`, k, String(v)); }
@@ -150,6 +186,7 @@ export class Engine extends DurableObject {
     if (url.pathname === '/init') return jres({ ok: true, data: this.secret });
     if (url.pathname === '/tick') {
       try { await this.rawat(); await this.cadangkanOtomatis(); } catch (e) { console.error('tick', e && e.stack || e); }
+      await this.aturAlarm().catch(() => {});
       return jres({ ok: true });
     }
     let body;
@@ -170,13 +207,29 @@ export class Engine extends DurableObject {
   async alarm() {
     this.alarmAt = 0;
     try { await this.rawat(); } catch (e) { console.error('alarm', e && e.stack || e); }
-    if (this.adaKerja()) await this.pasangAlarm();
+    try { await this.cadangkanOtomatis(); } catch (e) { console.error('cadangan', e && e.stack || e); }
+    await this.aturAlarm();
   }
-  async pasangAlarm() {
+  /** Alarm hanya dipasang bila ada pekerjaan: ujian berjalan/belum tersinkron, atau cadangan GitHub tertunda.
+   *  Menggantikan pemicu terjadwal tiap jam (yang membangunkan mesin ujian walau tidak ada pekerjaan). */
+  async aturAlarm() {
     const t = Date.now();
-    if (this.alarmAt && this.alarmAt > t && this.alarmAt <= t + ALARM_MS + 5000) return;
-    this.alarmAt = t + ALARM_MS;
-    await this.ctx.storage.setAlarm(this.alarmAt);
+    let at = this.adaKerja() ? t + ALARM_MS : 0;
+    const b = this.waktuCadangan();
+    if (b && (!at || b < at)) at = Math.max(b, t + 10000);
+    if (!at) return;
+    if (this.alarmAt && this.alarmAt > t && this.alarmAt <= at + 5000) return;
+    this.alarmAt = at;
+    await this.ctx.storage.setAlarm(at);
+  }
+  pasangAlarm() { return this.aturAlarm(); }
+  adaPeserta() { for (const L of this.L.values()) for (const P of L.P.values()) if (P.status === 'mengerjakan') return true; return false; }
+  waktuCadangan() {
+    if (!this.env.DATA_REPO || !this.env.GITHUB_TOKEN || !this.bdirty || !this.bdirty.size) return 0;
+    if (this.adaPeserta()) return 0;   // ditunda selama ujian berjalan (alarm perawatan ujian tetap jalan)
+    let at = this.lastBackup + BACKUP_MS;
+    if (this.cadanganGagal) at = Math.max(at, this.cadanganGagal.t + 6 * 3600000);
+    return at;
   }
   adaKerja() {
     for (const L of this.L.values()) {
@@ -260,9 +313,15 @@ export class Engine extends DurableObject {
     const kelas = [...(u.kelas || [])].sort(), kunci = kelas.join('|');
     const c = this.roster || (this.roster = new Map());
     let p = c.get(kunci);
+    const ada = !p && [...this.sql.exec(`SELECT d FROM c_roster WHERE id = ?`, kunci)][0];
+    if (ada) { p = Promise.resolve(new Map(JSON.parse(ada.d).map(s => [String(s.nis), s]))); c.set(kunci, p); }
     if (!p) {
+      const gen = this.rosterGen || 0;
       p = this.env.DB.prepare(`SELECT nis, nama, kelas FROM siswa WHERE kelas IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(kelas)).all()
-        .then(r => new Map(r.results.map(s => [String(s.nis), s])));
+        .then(r => {
+          if ((this.rosterGen || 0) === gen) this.sql.exec(`INSERT OR REPLACE INTO c_roster (id, d) VALUES (?, ?)`, kunci, JSON.stringify(r.results));
+          return new Map(r.results.map(s => [String(s.nis), s]));
+        });
       p.catch(() => { if (c.get(kunci) === p) c.delete(kunci); });
       c.set(kunci, p);
       if (c.size > 40) c.delete(c.keys().next().value);
@@ -271,7 +330,11 @@ export class Engine extends DurableObject {
     if (L) L.siswa = m;
     return m;
   }
-  lupakanSiswa() { this.jmlSiswa = null; this.roster = null; for (const L of this.L.values()) L.siswa = null; }
+  lupakanSiswa() {
+    this.jmlSiswa = null; this.roster = null; this.rosterGen = (this.rosterGen || 0) + 1;
+    this.metaSet('c_jml', ''); this.sql.exec(`DELETE FROM c_roster`);
+    for (const L of this.L.values()) L.siswa = null;
+  }
 
   // ==========================================================================
   //  PENYIMPANAN SESI
@@ -729,10 +792,13 @@ export class Engine extends DurableObject {
     if (!this.env.DATA_REPO || this.bdirty.has(k)) return;
     this.bdirty.add(k);
     this.metaSet('bdirty', JSON.stringify([...this.bdirty]));
+    this.aturAlarm().catch(() => {});
   }
   async cadangkanOtomatis() {
     if (!this.env.DATA_REPO || !this.env.GITHUB_TOKEN || !this.bdirty.size) return null;
     if (Date.now() - this.lastBackup < BACKUP_MS) return null;
+    // tunda selama ada siswa yang sedang mengerjakan (dicadangkan setelah ujian selesai)
+    if (this.adaPeserta()) return null;
     // gagal (mis. token salah) → jangan dicoba tiap pemicu, tunggu 6 jam atau sampai admin menekan tombol cadangkan
     if (this.cadanganGagal && Date.now() - this.cadanganGagal.t < 6 * 3600000) return null;
     try { const r = await this.cadangkan(); this.cadanganGagal = null; this.metaSet('cadanganGagal', ''); return r; }
@@ -781,6 +847,7 @@ A._dev = async function (d) {
   if (d.flush) { this.flushJw(); await this.syncD1(); }
   if (d.ukuranHasil) return { hasil: await this.env.DB.prepare(`SELECT COUNT(*) AS n, AVG(length(data)) AS rata, SUM(length(data)) AS total FROM hasil`).first(), db: await ukuranD1(this.env.DB) };
   const ukur = this.ukurBaca ? this.ukurBaca() : null;
+  if (d.perKueri && this.ukurKueri) { const k = { ...this.ukurKueri }; if (d.ukurNol) for (const x in this.ukurKueri) delete this.ukurKueri[x]; return { ukur, kueri: k }; }
   if (d.ukurNol && this.ukur) Object.keys(this.ukur).forEach(k => { this.ukur[k] = 0; });
   return { offset: d.offset, sockets: this.sockets.size, live: this.L.size, ukur };
 };
@@ -904,7 +971,12 @@ A.dashboard = async function (d, me) {
     bankTerbaru: banks.slice().sort((a, b) => (b.diubah || 0) - (a.diubah || 0)).slice(0, 5)
   };
   if (me.r === 'admin') {
-    if (this.jmlSiswa === null) this.jmlSiswa = (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM siswa`).first()).n;
+    if (this.jmlSiswa === null) {
+      // COUNT(*) membaca SEMUA baris siswa → dihitung sekali setelah data siswa berubah, lalu disimpan
+      const m = this.metaGet('c_jml');
+      this.jmlSiswa = m ? Number(m) : (await this.env.DB.prepare(`SELECT COUNT(*) AS n FROM siswa`).first()).n;
+      if (!m) this.metaSet('c_jml', String(this.jmlSiswa));
+    }
     res.jumlahSiswa = this.jmlSiswa;
     res.jumlahGuru = this.guru.size;
   }
@@ -1372,6 +1444,11 @@ A.sinkronSekarang = async function (d, me) {
     catch (e) { cadangan = { error: X.errInfo(e).msg }; this.cadanganGagal = { t: Date.now(), pesan: cadangan.error.slice(0, 300) }; this.metaSet('cadanganGagal', JSON.stringify(this.cadanganGagal)); }
   }
   return { disinkron: n || 0, cadangan, adaRepo: !!this.env.DATA_REPO };
+};
+/** Muat ulang salinan data (guru, bank, jadwal, pengaturan) dari D1 — bila data D1 diubah di luar aplikasi. */
+A.muatUlangData = async function (d, me) {
+  X.reqAdmin_(me);
+  return this.kunci(async () => { this.secret = await siapkanD1(this.env.DB); await this.muatCache(); return { guru: this.guru.size, bank: this.bankIdx.size, ujian: this.ujian.size }; });
 };
 A.statusSistem = async function (d, me) {
   X.reqAdmin_(me);

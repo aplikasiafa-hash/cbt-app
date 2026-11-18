@@ -1,5 +1,5 @@
 # cbt-app — kode aplikasi CBT Sekolah
-s
+
 Repo ini dipasang otomatis ke Cloudflare Worker **`cbt-sekolah`** (Workers Builds). Setiap commit ke `main`
 memasang ulang aplikasi dalam 1–2 menit.
 

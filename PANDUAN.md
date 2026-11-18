@@ -79,6 +79,12 @@ terlihat di **Pengaturan → Ukuran database**. Bila mendekati penuh: unduh Exce
 **Jadwal ujian** hapus jadwal tersebut dan pilih **Hapus hasilnya juga** (cadangan di GitHub `cbt-data` tidak ikut
 terhapus).
 
+**Biaya tetap (tidak bergantung jumlah siswa) — versi 2.4:** data guru, bank soal, jadwal, pengaturan, jumlah
+siswa, dan daftar siswa per kelas disalin ke penyimpanan internal mesin ujian. Saat mesin ujian bangun dari tidur
+(tidak dipakai beberapa menit) ia **tidak membaca D1 sama sekali**. Pemicu terjadwal cukup **sekali sehari**
+(06.00 WITA); kumpul otomatis, sinkron hasil, dan cadangan GitHub dijalankan alarm internal hanya saat ada pekerjaan.
+Bila data D1 pernah diubah di luar aplikasi (tidak disarankan), tekan **Pengaturan → Muat ulang data dari database**.
+
 Membuka halaman aplikasi (HTML) **tidak** dihitung kuota. Pemakaian sebenarnya bisa dilihat di
 dash.cloudflare.com → *Workers & Pages* → `cbt-sekolah` → *Metrics*.
 

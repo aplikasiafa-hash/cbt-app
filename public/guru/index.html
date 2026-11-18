@@ -1160,11 +1160,13 @@ table.tbl{width:100%;border-collapse:collapse}
         <tr><td>Repo cadangan (DATA_REPO)</td><td>{{ st.dataRepo || '— tidak dipakai' }}</td></tr>
         <tr><td>Token GitHub</td><td>{{ st.adaToken ? 'terpasang' : '— belum diatur' }}</td></tr>
         <tr v-if="st.dataRepo"><td>Cadangan terakhir</td><td>{{ st.cadanganTerakhir ? fmtWaktu(st.cadanganTerakhir) : 'belum pernah' }}<span v-if="st.antrianCadangan" class="muted"> · {{ st.antrianCadangan }} menunggu</span></td></tr>
+        <tr v-if="st.ukuranDb"><td>Ukuran database</td><td :style="st.ukuranDb > st.batasDb * 0.8 ? 'color:var(--merah,#c0392b)' : ''">{{ (st.ukuranDb / 1048576).toFixed(1) }} MB dari {{ Math.round(st.batasDb / 1048576) }} MB ({{ (st.ukuranDb / st.batasDb * 100).toFixed(1) }}%)<span v-if="st.ukuranDb > st.batasDb * 0.8" class="small"><br>Hampir penuh: unduh Excel hasil ujian lama, lalu hapus jadwal tersebut beserta hasilnya (menu Jadwal ujian).</span></td></tr>
         <tr v-if="st.cadanganGagal"><td>Cadangan gagal</td><td style="color:var(--merah,#c0392b)">{{ fmtWaktu(st.cadanganGagal.t) }} — {{ st.cadanganGagal.pesan }}<br><span class="muted small">Periksa token GitHub (lihat PASANG-TOKEN-GITHUB.md), lalu tekan tombol di bawah.</span></td></tr>
       </tbody></table>
       <div class="row" style="gap:8px">
         <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Menyimpan…' : (st && st.dataRepo ? 'Simpan & cadangkan ke GitHub sekarang' : 'Simpan semua hasil sekarang') }}</button>
         <button class="btn" @click="impor" :disabled="sibukSync" v-if="st && st.dataRepo">Impor data dari GitHub…</button>
+        <button class="btn" @click="muatUlangData" :disabled="sibukSync" title="Hanya perlu bila data di D1 diubah di luar aplikasi">Muat ulang data dari database</button>
       </div>
       <p class="small muted" style="margin-top:12px">Backend: <span class="tnum">{{ API_URL }}</span><span v-if="versi"> · versi {{ versi }}</span></p>
     </div>
@@ -1831,12 +1833,13 @@ app.component('v-jadwal', {
       catch (e) { toast(e.message, 'err', 6000); } finally { this.sibuk = false; }
     },
     async hapus(u) {
-      if (!await tanya('Hapus jadwal?', `Jadwal “${u.nama}” akan dihapus. Hasil yang sudah tersimpan tidak ikut terhapus.`, { ok: 'Hapus', bahaya: true })) return;
-      try { await api('deleteUjian', { id: u.id }); }
+      if (!await tanya('Hapus jadwal?', `Jadwal “${u.nama}” akan dihapus.`, { ok: 'Hapus', bahaya: true })) return;
+      const hapusHasil = await tanya('Hapus juga hasilnya?', 'Hasil ujian ini ikut dihapus dari database untuk mengosongkan ruang (batas paket gratis 500 MB). Unduh Excel di menu Hasil dulu bila masih diperlukan. Cadangan di GitHub (cbt-data) tidak ikut terhapus.', { ok: 'Hapus hasilnya juga', batal: 'Simpan hasilnya', bahaya: true });
+      try { await api('deleteUjian', { id: u.id, hapusHasil }); }
       catch (e) {
         if (e.code !== 'ADA_PESERTA') return toast(e.message, 'err');
         if (!await tanya('Sudah ada peserta', e.message, { ok: 'Tetap hapus', bahaya: true })) return;
-        try { await api('deleteUjian', { id: u.id, paksa: true }); } catch (e2) { return toast(e2.message, 'err'); }
+        try { await api('deleteUjian', { id: u.id, paksa: true, hapusHasil }); } catch (e2) { return toast(e2.message, 'err'); }
       }
       toast('Jadwal dihapus'); this.muat();
     }
@@ -2133,6 +2136,10 @@ app.component('v-pengaturan', {
       this.sibuk = true;
       try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); toast('Pengaturan tersimpan'); }
       catch (e) { toast(e.message, 'err'); } finally { this.sibuk = false; }
+    },
+    async muatUlangData() {
+      if (!await tanya('Muat ulang data?', 'Data guru, bank soal, jadwal, dan pengaturan dibaca ulang dari database D1. Hanya perlu bila data di D1 diubah di luar aplikasi.', { ok: 'Muat ulang' })) return;
+      try { const r = await api('muatUlangData'); toast(`Dimuat ulang: ${r.guru} guru, ${r.bank} bank soal, ${r.ujian} jadwal`); this.muatStatus && this.muatStatus(); } catch (e) { toast(e.message, 'err'); }
     },
     muatStatus() { api('statusSistem').then(r => this.st = r).catch(() => {}); },
     async sinkron() {

@@ -36,9 +36,9 @@
   "durable_objects": { "bindings": [{ "name": "ENGINE", "class_name": "Engine" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Engine"] }],
 
-  // Perawatan tiap jam pada jam sekolah 07.00–18.00 WITA (= 23.00–10.00 UTC): 12 kali/hari.
-  // Kumpul otomatis saat ujian tetap berjalan tepat waktu lewat alarm internal, tidak bergantung pada ini.
-  "triggers": { "crons": ["0 23,0-10 * * *"] },
+  // Cukup sekali sehari (06.00 WITA = 22.00 UTC) sebagai jaring pengaman. Kumpul otomatis, sinkron hasil, dan
+  // cadangan GitHub dijalankan alarm internal mesin ujian HANYA saat ada pekerjaan (hemat "Rows read" D1).
+  "triggers": { "crons": ["0 22 * * *"] },
 
   "vars": {
     // Akun GitHub: aplikasiafa-hash
