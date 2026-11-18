@@ -155,16 +155,25 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
-## Hak akses (versi 2.4.0-CBT)
+## Hak akses (versi 2.5.0-CBT)
 
-| | Admin / pengawas | Guru pemilik soal | Siswa |
-|---|---|---|---|
-| Bank soal milik guru | lihat di daftar saja (tidak bisa Edit/Hapus) | susun, ubah, hapus | — |
-| Mata pelajaran bank soal baru | semua | hanya mapel yang ditetapkan admin di akunnya | — |
-| Monitoring | status saja (tanpa nilai) | status saja (tanpa nilai) | — |
-| Hasil: nilai, skor, ringkasan & KKM, analisis soal, koreksi, hitung ulang | **tidak** (hanya daftar peserta & status) | ya | nilai sendiri bila "Tampilkan nilai" aktif |
-| Jadwal ujian yang terlihat | semua | jadwal yang memakai bank soalnya | **hanya hari ini** |
-| Excel data siswa/guru (kolom Password) | ya | — | — |
+| | Admin | Guru pengawas | Guru pemilik soal | Siswa |
+|---|---|---|---|---|
+| Bank soal milik guru | lihat di daftar saja (tidak bisa Edit/Hapus) | — | susun, ubah, hapus | — |
+| Mata pelajaran bank soal baru | semua | — | hanya mapel yang ditetapkan admin di akunnya | — |
+| Jadwal ujian yang terlihat | semua (atur jadwal, kelas, **pengawas**) | **hanya hari ini**: Ujian, Kelas, Waktu, Durasi, Pengawas | sama dengan pengawas | **hanya hari ini** |
+| Monitoring | semua ujian, semua kelas | **hanya ujian yang ia awasi, hanya kelas yang ia awasi** (bukan berdasarkan mapel) | hanya bila ia juga ditetapkan sebagai pengawas | — |
+| Token ujian | lihat & ganti | lihat & ganti (ujian yang ia awasi) | — | — |
+| Hasil: nilai, skor, ringkasan & KKM, analisis soal, koreksi, hitung ulang | **tidak** (hanya daftar peserta & status) | — | ya | nilai sendiri bila "Tampilkan nilai" aktif |
+| Excel data siswa/guru (kolom Password), impor siswa & guru | ya | — | — | — |
+
+**Menetapkan pengawas:** Jadwal ujian → Buat/Ubah jadwal → *Nama pengawas*: ketik nama guru lalu Enter (atau pilih
+dari daftar). Bila kelas peserta lebih dari satu, tandai kelas yang diawasi tiap pengawas; *Semua kelas* = mengawasi
+seluruh kelas peserta. Pengawas hanya melihat dan menindak (reset login, kumpulkan) siswa di kelasnya.
+
+**Impor guru:** Data guru → *Impor* → file Excel dengan kolom *Nama pengguna, Nama, Mata pelajaran, Password, Peran,
+Status* (sama dengan hasil *Unduh Excel*). Dicocokkan lewat nama pengguna. Guru baru tanpa password → password sama
+dengan nama pengguna. Guru yang sudah ada: sel kosong = tidak diubah.
 
 ## Cara kerja saat ujian
 

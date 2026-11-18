@@ -243,8 +243,36 @@ export class Engine extends DurableObject {
   //  DATA UJIAN, BANK, SISWA
   // ==========================================================================
   ujianWajib(id) { const u = this.ujian.get(str_(id)); if (!u) throw new AppError('Ujian tidak ditemukan'); return u; }
-  ringkas(u) { const r = X.ringkasUjian_(u); const b = this.bankIdx.get(u.bankId); if (b) r.jumlahSoal = b.jumlahSoal; return r; }
-  bolehUjian(me, u) { if (me.r === 'admin' || u.guruId === me.id) return true; throw new AppError('Anda tidak memiliki akses ke ujian ini'); }
+  ringkas(u) {
+    const r = X.ringkasUjian_(u); const b = this.bankIdx.get(u.bankId); if (b) r.jumlahSoal = b.jumlahSoal;
+    // nama pengawas diambil dari data guru terbaru (bila guru mengganti nama, jadwal ikut berubah)
+    r.pengawas = (u.pengawas || []).map(p => { const g = this.guru.get(p.id); return { id: p.id, nama: g ? g.nama : (p.nama || '(akun dihapus)'), kelas: p.kelas || [] }; });
+    return r;
+  }
+  /** Ringkasan untuk guru: tandai kelas yang ia awasi & apakah ia pemilik soal. Token hanya untuk pengawasnya. */
+  ringkasUntuk(u, me) {
+    const r = this.ringkas(u);
+    if (me.r === 'admin') return r;
+    const k = this.kelasAwas(me, u);
+    r.awasi = u.kelas.filter(x => k.has(x)); r.pemilik = u.guruId === me.id;
+    if (!k.size) r.token = '';
+    return r;
+  }
+  /** Kelas yang diawasi akun ini pada ujian u: null = semua (admin), Set kosong = bukan pengawas. */
+  kelasAwas(me, u) {
+    if (me.r === 'admin') return null;
+    const s = new Set();
+    for (const p of u.pengawas || []) {
+      if (p.id !== me.id) continue;
+      const kl = (p.kelas || []).filter(k => u.kelas.includes(k));
+      (kl.length ? kl : u.kelas).forEach(k => s.add(k));
+    }
+    return s;
+  }
+  /** Monitoring: admin (semua kelas) atau guru yang ditugaskan sebagai pengawas (hanya kelas yang ia awasi). */
+  bolehPantau(me, u) { const k = this.kelasAwas(me, u); if (k === null || k.size) return k; throw new AppError('Anda bukan pengawas ujian ini. Pengawas ditetapkan admin di menu Jadwal ujian.'); }
+  /** Hasil ujian: admin (daftar peserta saja) atau guru pemilik bank soal. */
+  bolehHasil(me, u) { if (me.r === 'admin' || u.guruId === me.id) return true; throw new AppError('Anda tidak memiliki akses ke hasil ujian ini'); }
   /** Nilai, analisis, dan koreksi hanya untuk guru pemilik bank soal ujian ini (bukan admin/pengawas lain). */
   pemilikNilai(me, u) { if (u.guruId === me.id) return true; throw new AppError('Nilai hanya dapat dilihat dan dikoreksi oleh guru pemilik soal.'); }
   bolehBank(me, b) { if (me.r === 'admin' || b.guruId === me.id) return true; throw new AppError('Anda tidak memiliki akses ke bank soal ini'); }
@@ -635,12 +663,12 @@ export class Engine extends DurableObject {
   async pantau(ws, me, mId) {
     X.reqGuru_(me);
     const u = this.ujianWajib(mId);
-    this.bolehUjian(me, u);
+    const kelas = this.bolehPantau(me, u);
     const L = await this.getL(u.id);
-    const snap = await this.monitorPayload(L, u);
+    const snap = await this.monitorPayload(L, u, kelas, me);
     if (!this.sockets.has(ws)) return;
     this.lepasIkatan(ws);
-    ws.info.m = { L, me }; ws.mv = L.mv;
+    ws.info.m = { L, me, kelas }; ws.mv = L.mv;
     L.mons.add(ws);
     if (ws.info.rpc) kirimBesar(ws, { t: 'snap', id: 'snap' + (++this.nomorSnap || (this.nomorSnap = 1)), data: snap, now: now() });
     else kirim(ws, { t: 'snap', data: snap, now: now() });
@@ -749,10 +777,10 @@ export class Engine extends DurableObject {
     for (const L of this.L.values()) {
       for (const ws of L.mons) {
         if (ws.mv >= L.mv) continue;
-        const rows = [];
-        for (const P of L.P.values()) if (P.mv > ws.mv) rows.push(this.monRow(L, P));
+        const rows = [], kl = ws.info && ws.info.m && ws.info.m.kelas;   // pengawas: hanya kelas yang diawasi
+        for (const P of L.P.values()) if (P.mv > ws.mv && (!kl || kl.has(P.kelas))) rows.push(this.monRow(L, P));
         ws.mv = L.mv;
-        kirim(ws, { t: 'diff', rows, now: t });
+        if (rows.length) kirim(ws, { t: 'diff', rows, now: t });
       }
     }
     if (this.ketukan % 10 === 0) {         // ±40 detik: jaga koneksi tetap hidup + sinkron jam
@@ -776,15 +804,20 @@ export class Engine extends DurableObject {
       catatan: P.catatan || '', adaPerangkat: !!P.perangkat
     };
   }
-  async monitorPayload(L, u) {
+  /** kelas: null = semua kelas (admin); Set = hanya kelas yang diawasi pengawas ini. */
+  async monitorPayload(L, u, kelas, me) {
     const siswa = await this.siswaUjian(u, L);
+    const ok = k => !kelas || kelas.has(k);
     const peserta = [];
     for (const [nis, s] of siswa) {
+      if (!ok(s.kelas)) continue;
       const P = L.P.get(nis);
       peserta.push(P ? this.monRow(L, P) : { nis, nama: s.nama, kelas: s.kelas, status: 'belum', mulai: 0, deadline: 0, selesai: 0, catatan: '', adaPerangkat: false });
     }
-    for (const P of L.P.values()) if (!siswa.has(P.nis)) peserta.push(this.monRow(L, P));
-    return { ujian: this.ringkas(u), peserta, serverTime: now() };
+    for (const P of L.P.values()) if (!siswa.has(P.nis) && ok(P.kelas)) peserta.push(this.monRow(L, P));
+    const uj = this.ringkas(u);
+    if (kelas) uj.kelas = u.kelas.filter(k => kelas.has(k));
+    return { ujian: uj, peserta, serverTime: now(), pemilik: !!me && u.guruId === me.id, semuaKelas: !kelas };
   }
 
   // ==========================================================================
@@ -961,15 +994,21 @@ A.saveConfig = async function (d, me) {
 
 A.dashboard = async function (d, me) {
   X.reqGuru_(me);
-  const t = now();
-  let banks = [...this.bankIdx.values()], ujian = [...this.ujian.values()];
-  if (me.r !== 'admin') { banks = banks.filter(b => b.guruId === me.id); ujian = ujian.filter(u => u.guruId === me.id); }
+  const t = now(), admin = me.r === 'admin';
+  let banks = [...this.bankIdx.values()];
+  const semua = [...this.ujian.values()];
+  if (!admin) banks = banks.filter(b => b.guruId === me.id);
+  // guru: "milik" = ujian dari bank soalnya (untuk hasil); "awas" = ujian yang ia awasi (untuk monitoring)
+  const milik = admin ? semua : semua.filter(u => u.guruId === me.id);
+  const awas = admin ? semua : semua.filter(u => this.kelasAwas(me, u).size);
+  const terkait = admin ? semua : [...new Set([...milik, ...awas])];
   const res = {
     jumlahBank: banks.length,
     jumlahSoal: banks.reduce((a, b) => a + (b.jumlahSoal || 0), 0),
-    jumlahUjian: ujian.length,
-    berlangsung: ujian.filter(u => u.aktif && u.mulai <= t && u.selesai >= t).length,
-    mendatang: ujian.filter(u => u.selesai >= t && u.mulai <= t + 86400000).sort((a, b) => a.mulai - b.mulai).map(u => this.ringkas(u)),
+    jumlahUjian: milik.length,
+    jumlahAwas: admin ? 0 : awas.length,
+    berlangsung: terkait.filter(u => u.aktif && u.mulai <= t && u.selesai >= t).length,
+    mendatang: awas.filter(u => u.selesai >= t && u.mulai <= t + 86400000 && (admin || u.aktif)).sort((a, b) => a.mulai - b.mulai).map(u => this.ringkasUntuk(u, me)),
     bankTerbaru: banks.slice().sort((a, b) => (b.diubah || 0) - (a.diubah || 0)).slice(0, 5)
   };
   if (me.r === 'admin') {
@@ -1071,12 +1110,38 @@ A.uploadGambar = async function (d, me) {
 };
 
 // ---------------------------------------------------------------- jadwal
+/**
+ * Admin: semua jadwal. Guru, menurut halaman (d.untuk):
+ *  - 'jadwal'  : semua ujian aktif HARI INI (tanpa token, kecuali yang ia awasi)
+ *  - 'monitor' : ujian yang ia awasi sebagai pengawas
+ *  - 'hasil'   : ujian dari bank soal miliknya
+ */
 A.listUjian = async function (d, me) {
   X.reqGuru_(me);
   let list = [...this.ujian.values()];
-  if (me.r !== 'admin') list = list.filter(u => u.guruId === me.id);
-  return list.map(u => this.ringkas(u)).sort((a, b) => b.mulai - a.mulai);
+  if (me.r !== 'admin') {
+    const untuk = str_(d && d.untuk, 20), t = now();
+    const awas = u => this.kelasAwas(me, u).size > 0;
+    if (untuk === 'jadwal') list = list.filter(u => u.aktif && X.ujianHariIni_(u, t));
+    else if (untuk === 'monitor') list = list.filter(awas);
+    else if (untuk === 'hasil') list = list.filter(u => u.guruId === me.id);
+    else list = list.filter(u => u.guruId === me.id || awas(u));
+  }
+  return list.map(u => this.ringkasUntuk(u, me)).sort((a, b) => b.mulai - a.mulai);
 };
+/** Pengawas dari formulir jadwal: [{id, kelas:[]}] — kelas kosong = mengawasi semua kelas peserta. */
+function bacaPengawas(self, d, kelas) {
+  const out = [], ada = new Set();
+  for (const p of (Array.isArray(d.pengawas) ? d.pengawas : []).slice(0, 100)) {
+    const id = str_(p && p.id, 60), g = self.guru.get(id);
+    if (!g || ada.has(id)) continue;
+    ada.add(id);
+    let kl = [...new Set((Array.isArray(p.kelas) ? p.kelas : []).map(k => str_(k, 40)))].filter(k => kelas.includes(k));
+    if (kl.length === kelas.length) kl = [];
+    out.push({ id, nama: g.nama, kelas: kl });
+  }
+  return out;
+}
 A.saveUjian = async function (d, me) {
   X.reqAdmin_(me);
   const nama = str_(d.nama, 150).trim();
@@ -1089,6 +1154,7 @@ A.saveUjian = async function (d, me) {
   const bank = await this.getBank(str_(d.bankId));
   if (!bank) throw new AppError('Bank soal tidak ditemukan');
   if (!bank.soal.length) throw new AppError('Bank soal masih kosong');
+  const pengawas = bacaPengawas(this, d, kelas);
   const u = await this.kunci(async () => {
     const lama = d.id ? this.ujian.get(str_(d.id)) : null;
     if (d.id && !lama) throw new AppError('Jadwal tidak ditemukan');
@@ -1097,7 +1163,7 @@ A.saveUjian = async function (d, me) {
       id: lama ? lama.id : uid_('u'), nama,
       bankId: bank.id, bankJudul: bank.judul, mapel: bank.mapel, tingkat: str_(d.tingkat, 20) || bank.tingkat,
       guruId: bank.guruId, guruNama: bank.guruNama, jumlahSoal: bank.soal.length,
-      kelas, mulai, selesai, durasi,
+      kelas, mulai, selesai, durasi, pengawas,
       acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: bool_(d.pakaiToken),
       token: bool_(d.pakaiToken) ? ((lama && lama.token) || X.buatToken_()) : '',
       maxPelanggaran: Math.max(0, Math.round(num_(d.maxPelanggaran, 0))),
@@ -1107,7 +1173,17 @@ A.saveUjian = async function (d, me) {
     };
     await this.env.DB.prepare(`INSERT OR REPLACE INTO ujian (id, selesai, data) VALUES (?, ?, ?)`).bind(u.id, u.selesai, JSON.stringify(u)).run();
     this.ujian.set(u.id, u);
-    const L = this.L.get(u.id); if (L) L.siswa = null;
+    const L = this.L.get(u.id);
+    if (L) {
+      L.siswa = null;
+      // monitor yang sedang terbuka mengikuti pengawas & kelas terbaru
+      for (const ws of [...L.mons]) {
+        const m = ws.info && ws.info.m; if (!m) continue;
+        const k = this.kelasAwas(m.me, u);
+        if (k && !k.size) { kirim(ws, { t: 'err', k: 'pantau', code: 'ERR', msg: 'Anda tidak lagi menjadi pengawas ujian ini' }); this.akhiriIkatan(ws, 1000, 'bukan pengawas'); }
+        else this.pantau(ws, m.me, u.id).catch(() => {});
+      }
+    }
     this.tandaiCadangan('ujian');
     return u;
   });
@@ -1146,7 +1222,7 @@ A.gantiTokenUjian = async function (d, me) {
   X.reqGuru_(me);
   return this.kunci(async () => {
     const u = this.ujianWajib(d.id);
-    if (me.r !== 'admin' && u.guruId !== me.id) throw new AppError('Tidak berhak mengganti token');
+    if (me.r !== 'admin' && !this.kelasAwas(me, u).size) throw new AppError('Token hanya bisa diganti admin atau pengawas ujian ini');
     const u2 = { ...u, token: X.buatToken_(), pakaiToken: true, diubah: now() };
     await this.env.DB.prepare(`UPDATE ujian SET data = ? WHERE id = ?`).bind(JSON.stringify(u2), u.id).run();
     this.ujian.set(u.id, u2);
@@ -1174,15 +1250,16 @@ A.selesaiUjian = async function (d, me) {
 // ---------------------------------------------------------------- monitoring, hasil, koreksi
 A.monitorUjian = async function (d, me) {
   X.reqGuru_(me);
-  const u = this.ujianWajib(d.ujianId); this.bolehUjian(me, u);
-  return this.monitorPayload(await this.getL(u.id), u);
+  const u = this.ujianWajib(d.ujianId); const kelas = this.bolehPantau(me, u);
+  return this.monitorPayload(await this.getL(u.id), u, kelas, me);
 };
 
 async function cariP(self, me, d) {
-  const u = self.ujianWajib(d.ujianId); self.bolehUjian(me, u);
+  const u = self.ujianWajib(d.ujianId); const kelas = self.bolehPantau(me, u);
   const L = await self.getL(u.id);
   const P = L.P.get(str_(d.nis));
   if (!P) throw new AppError('Peserta tidak ditemukan di ujian ini');
+  if (kelas && !kelas.has(P.kelas)) throw new AppError('Siswa ini tidak berada di kelas yang Anda awasi');
   return { u, L, P };
 }
 A.resetLogin = async function (d, me) {
@@ -1217,7 +1294,7 @@ A.paksaSelesai = async function (d, me) {
 
 A.hasilUjian = async function (d, me) {
   X.reqGuru_(me);
-  const u = this.ujianWajib(d.ujianId); this.bolehUjian(me, u);
+  const u = this.ujianWajib(d.ujianId); this.bolehHasil(me, u);
   const bank = await this.getBank(u.bankId);
   await this.syncD1();
   const map = new Map(), L = this.L.get(u.id);
@@ -1260,7 +1337,7 @@ function terapkanManual(rec, manualBaru, bank) {
 }
 A.koreksi = async function (d, me) {
   X.reqGuru_(me);
-  const u = this.ujianWajib(d.ujianId); this.bolehUjian(me, u); this.pemilikNilai(me, u);
+  const u = this.ujianWajib(d.ujianId); this.bolehHasil(me, u); this.pemilikNilai(me, u);
   const bank = await this.getBank(u.bankId);
   const nis = str_(d.nis);
   return this.kunci(async () => {
@@ -1274,7 +1351,7 @@ A.koreksi = async function (d, me) {
 };
 A.koreksiMassal = async function (d, me) {
   X.reqGuru_(me);
-  const u = this.ujianWajib(d.ujianId); this.bolehUjian(me, u); this.pemilikNilai(me, u);
+  const u = this.ujianWajib(d.ujianId); this.bolehHasil(me, u); this.pemilikNilai(me, u);
   const bank = await this.getBank(u.bankId);
   const items = (d.items || []).slice(0, 3000);
   return this.kunci(async () => {
@@ -1292,7 +1369,7 @@ A.koreksiMassal = async function (d, me) {
 };
 A.hitungUlang = async function (d, me) {
   X.reqGuru_(me);
-  const u = this.ujianWajib(d.ujianId); this.bolehUjian(me, u); this.pemilikNilai(me, u);
+  const u = this.ujianWajib(d.ujianId); this.bolehHasil(me, u); this.pemilikNilai(me, u);
   const bank = await this.getBank(u.bankId);
   if (!bank) throw new AppError('Bank soal tidak ditemukan');
   return this.kunci(async () => {
@@ -1350,6 +1427,52 @@ A.deleteGuru = async function (d, me) {
     this.guru.delete(g.id);
     this.tandaiCadangan('guru');
     return true;
+  });
+};
+
+/**
+ * Impor guru dari Excel (format sama dengan "Unduh Excel"): Nama pengguna, Nama, Mata pelajaran, Password, Peran, Status.
+ * Dicocokkan lewat nama pengguna. Guru baru dengan password kosong → password = nama pengguna.
+ * Guru lama: sel kosong (mapel/peran/status/password) = tidak diubah. Akun admin yang sedang dipakai tetap admin & aktif.
+ */
+A.importGuru = async function (d, me) {
+  X.reqAdmin_(me);
+  const rows = (d.rows || []).slice(0, 1000);
+  if (!rows.length) throw new AppError('Tidak ada data untuk diimpor');
+  const kosong = v => v === undefined || v === null || String(v).trim() === '';
+  const mapelCfg = new Map((this.config.mapel || []).map(m => [m.toLowerCase(), m]));
+  const valid = new Map(), lewati = [];
+  rows.forEach((r, i) => {
+    const username = str_(r.username, 40).trim().toLowerCase(), nama = str_(r.nama, 120).trim();
+    if (!/^[a-z0-9._-]{3,40}$/.test(username) || !nama) { lewati.push(i + 1); return; }
+    const mapel = kosong(r.mapel) ? null : [...new Set(String(r.mapel).split(/[,;\n]/).map(m => m.trim()).filter(Boolean).map(m => mapelCfg.get(m.toLowerCase()) || str_(m, 80)))];
+    const peran = kosong(r.peran) ? null : (/admin/i.test(String(r.peran)) ? 'admin' : 'guru');
+    const aktif = kosong(r.status) ? null : !/^(non|tidak|0|false|off|mati)/i.test(String(r.status).trim());
+    valid.set(username, { username, nama, mapel, peran, aktif, pw: X.sandiDariExcel_(r.password) });
+  });
+  if (!valid.size) throw new AppError('Tidak ada baris yang valid. Nama pengguna 3–40 karakter (huruf kecil, angka, titik, garis bawah) dan Nama wajib diisi.');
+  return this.kunci(async () => {
+    const byUser = new Map([...this.guru.values()].map(g => [g.username, g]));
+    const simpan = [];
+    let baru = 0, ubah = 0;
+    for (const v of valid.values()) {
+      const lama = byUser.get(v.username), saya = lama && lama.id === me.id;
+      const g = lama ? { ...lama } : { id: uid_('g'), mapel: [], role: 'guru', aktif: true };
+      g.username = v.username; g.nama = v.nama;
+      if (v.mapel) g.mapel = v.mapel;
+      if (v.peran) g.role = v.peran;
+      if (v.aktif !== null) g.aktif = v.aktif;
+      if (saya) { g.role = 'admin'; g.aktif = true; }          // tidak bisa menurunkan / menonaktifkan akun sendiri
+      const pw = v.pw || (lama ? '' : v.username);
+      if (pw) { const cr = await X.makeCred_(pw); g.salt = cr.salt; g.hash = cr.hash; g.sandi = await X.enkripSandi_(pw, this.secret); }
+      if (lama) ubah++; else baru++;
+      simpan.push(g);
+    }
+    const DB = this.env.DB, st = simpan.map(g => DB.prepare(`INSERT OR REPLACE INTO guru (id, username, data) VALUES (?, ?, ?)`).bind(g.id, g.username, JSON.stringify(g)));
+    for (let i = 0; i < st.length; i += 50) await DB.batch(st.slice(i, i + 50));
+    simpan.forEach(g => this.guru.set(g.id, g));
+    this.tandaiCadangan('guru');
+    return { baru, ubah, lewati };
   });
 };
 

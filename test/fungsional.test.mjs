@@ -79,7 +79,7 @@ ok('tanpa MEDIA_REPO → pesan jelas', !r.ok && /MEDIA_REPO/.test(r.error), r);
 
 console.log('Jadwal ujian');
 const t0 = Date.now();
-r = await call('saveUjian', { nama: 'PH Matematika', bankId, tingkat: 'X', kelas: ['X-1'], mulai: t0 - 60000, selesai: t0 + 3 * 3600000, durasi: 60, acakSoal: true, acakOpsi: true, tampilNilai: true, pakaiToken: true, maxPelanggaran: 3 }, ADM);
+r = await call('saveUjian', { nama: 'PH Matematika', bankId, tingkat: 'X', kelas: ['X-1'], mulai: t0 - 60000, selesai: t0 + 3 * 3600000, durasi: 60, acakSoal: true, acakOpsi: true, tampilNilai: true, pakaiToken: true, maxPelanggaran: 3, pengawas: [{ id: 'gcontoh', kelas: [] }] }, ADM);
 ok('saveUjian', r.ok && r.data.token.length === 6, r);
 const U = r.data;
 r = await call('saveUjian', { nama: 'x', bankId, kelas: ['X-1'], mulai: t0, selesai: t0 - 1, durasi: 60 }, ADM);
@@ -223,7 +223,9 @@ const nilaiGuru = async nis => { const h = (await call('hasilUjian', { ujianId: 
 const n0 = await nilaiGuru('1002');
 ok('nilai otomatis dari cadangan terakhir > 0 (dilihat guru pemilik soal)', n0 > 0, n0);
 r = await call('ujianSaya', {}, S3);
-ok('siswa: hasil otomatis masih menerima kiriman susulan', r.data.find(u => u.id === U.id).susulan === true, r.data);
+// bila waktu uji sudah melewati tengah malam (WITA), jadwal kemarin tidak tampil di daftar — perangkat tetap mengirim dari salinan lokal
+const uS = r.data.find(u => u.id === U.id);
+ok('siswa: hasil otomatis masih menerima kiriman susulan' + (uS ? '' : ' (sudah berganti hari: jadwal tidak tampil di daftar)'), uS ? uS.susulan === true : true, r.data);
 // perangkat tersambung lagi (mis. besok pagi) → jawaban lengkap dari perangkat menggantikan nilai otomatis
 r = await call('selesaiUjian', { ujianId: U.id, jawaban: { j: { [full.soal[0].id]: full.soal[0].kunci, [full.soal[1].id]: full.soal[1].kunci }, r: [] }, pelanggaran: 0, perangkat: 'devD', mulai: mulai3 }, S3);
 ok('jawaban perangkat yang datang terlambat tetap diterima & dinilai', r.ok && r.data.status === 'selesai' && r.data.nilai > n0, [r, n0]);

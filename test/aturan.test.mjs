@@ -1,4 +1,4 @@
-// Uji aturan v2.4.0-CBT: jadwal hari ini, bank guru terkunci untuk admin, nilai hanya untuk guru pemilik,
+// Uji aturan v2.4.0-CBT (versi 2.5.0-CBT): jadwal hari ini, bank guru terkunci untuk admin, nilai hanya untuk guru pemilik,
 // monitor tanpa nilai, kolom password Excel, mapel guru sesuai pilihan admin, versi.
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 const call = async (a, d = {}, t = '') => (await fetch(BASE + '/api?a=' + a, { method: 'POST', body: JSON.stringify({ action: a, data: d, token: t }) })).json();
@@ -6,7 +6,7 @@ let fails = 0; const ok = (n, c, i) => { console.log((c ? '  ✓ ' : '  ✗ ') +
 const ADM = (await call('loginGuru', { username: 'admin', password: 'admin123' })).data.token;
 
 console.log('Versi');
-ok('versi 2.4.0-CBT', (await call('ping')).data.versi === '2.4.0-CBT');
+ok('versi 2.5.0-CBT', (await call('ping')).data.versi === '2.5.0-CBT');
 
 console.log('Akun guru & mata pelajaran');
 let r = await call('saveGuru', { username: 'bu_sri', nama: 'Bu Sri', password: 'sri12345', role: 'guru', mapel: ['Biologi', 'Kimia'] }, ADM);
