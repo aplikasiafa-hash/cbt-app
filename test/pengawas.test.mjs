@@ -17,7 +17,7 @@ const ADM = (await call('loginGuru', { username: 'admin', password: 'admin123' }
 const admin = (await call('profilSaya', {}, ADM)).data;
 
 console.log('Versi');
-ok('versi 2.6.0-CBT', (await call('ping')).data.versi === '2.6.0-CBT');
+ok('versi 2.7.0-CBT', (await call('ping')).data.versi === '2.7.0-CBT');
 
 console.log('Impor guru dari Excel');
 let r = await call('importGuru', { rows: [

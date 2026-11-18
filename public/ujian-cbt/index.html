@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#4A525C">
+<title>Ujian CBT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.19.1/dist/katex.min.css">
+<style>
+:root{
+  --kertas:#fff; --latar:#EDEFF2; --seragam:#4A525C; --seragam-gelap:#3A4049;
+  --teks:#252A30; --teks-2:#5F6772; --teks-3:#8A919B; --garis:#D7DBE0; --garis-2:#E8EBEE;
+  --tinta:#D23F68; --tinta-muda:#FBEAF0; --grafit:#26292E;
+  --stabilo:#F7D54A; --stabilo-muda:#FFF7D6;
+  --hijau:#2E7D57; --hijau-muda:#E2F2E9; --merah:#B3261E; --merah-muda:#FBE8E7; --biru:#2F5E9E; --biru-muda:#E7EEF8;
+  --font:'Plus Jakarta Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-soal:'Literata',Georgia,'Times New Roman',serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%}
+body{font-family:var(--font);font-size:15px;line-height:1.5;color:var(--teks);background:var(--latar);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--tinta);outline-offset:2px}
+[v-cloak]{display:none}
+h1,h2,h3{margin:0;line-height:1.25;letter-spacing:-.01em}
+p{margin:0}
+.muted{color:var(--teks-2)} .small{font-size:13px} .tnum{font-variant-numeric:tabular-nums}
+.mark{display:inline-flex;gap:4px;align-items:center}
+.mark i{width:11px;height:11px;border-radius:50%;border:1.6px solid currentColor;display:block}
+.mark i.on{background:currentColor}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:9px;border:1px solid var(--garis);background:var(--kertas);cursor:pointer;font-weight:700;white-space:nowrap;color:var(--teks);text-decoration:none}
+.btn:hover{border-color:#B9BFC7}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--grafit);border-color:var(--grafit);color:#fff}
+.btn-primary:hover{background:#000}
+.btn-tinta{background:var(--tinta);border-color:var(--tinta);color:#fff}
+.btn-ghost{border-color:transparent;background:transparent}
+.btn-block{width:100%}
+.btn-sm{min-height:36px;padding:0 12px;font-size:14px}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.field>span{font-weight:700;font-size:14px}
+.field input{height:48px;padding:0 14px;border:1.5px solid var(--garis);border-radius:9px;background:#fff;font-size:16px}
+.field input:focus{border-color:var(--grafit);outline:none}
+.err{background:var(--merah-muda);color:var(--merah);border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:14px}
+
+/* login — kepala lembar jawaban */
+.login{min-height:100vh;display:grid;place-items:center;padding:20px;background:var(--seragam)}
+.lembar{width:100%;max-width:420px;background:#fff;border-radius:12px;overflow:hidden}
+.lembar-head{border-bottom:2px solid var(--tinta);padding:22px 26px 16px;color:var(--tinta);display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.lembar-head b{display:block;font-size:20px;color:var(--teks);margin-top:10px}
+.lembar-head span{font-size:13px;color:var(--teks-2)}
+.lembar-body{padding:22px 26px 24px}
+.lembar-body p.muted{margin-bottom:18px;font-size:14px}
+
+/* kerangka halaman daftar */
+.bar-atas{background:var(--seragam);color:#fff;padding:12px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:20}
+.bar-atas .who{margin-left:auto;text-align:right;font-size:13px;line-height:1.35}
+.bar-atas .who b{display:block;font-size:14px}
+.bar-atas .btn{min-height:34px;background:transparent;color:#fff;border-color:rgba(255,255,255,.3);padding:0 12px;font-size:13px}
+.wadah{max-width:760px;margin:0 auto;padding:24px 16px 60px}
+.wadah h1{font-size:22px;margin-bottom:4px}
+.kartu{background:#fff;border:1px solid var(--garis);border-radius:12px;padding:18px 20px;margin-top:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.kartu .info{flex:1;min-width:220px}
+.kartu .mapel{font-size:13px;color:var(--teks-2);font-weight:600}
+.kartu h3{font-size:17px;margin:2px 0 6px}
+.kartu .waktu{font-size:13.5px;color:var(--teks-2)}
+.chip{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:13px;font-size:12.5px;font-weight:700}
+.chip-abu{background:#EEF0F2;color:var(--teks-2)}
+.chip-hijau{background:var(--hijau-muda);color:var(--hijau)}
+.chip-kuning{background:var(--stabilo-muda);color:#7A5B00}
+.kosong{text-align:center;padding:50px 20px;color:var(--teks-2)}
+.kosong b{display:block;color:var(--teks);font-size:16px;margin-bottom:6px}
+
+/* konfirmasi */
+.tbl-data{width:100%;border-collapse:collapse;margin:14px 0 18px}
+.tbl-data td{padding:9px 0;border-bottom:1px dashed var(--garis);vertical-align:top}
+.tbl-data td:first-child{color:var(--teks-2);width:40%;padding-right:12px}
+.tbl-data td:last-child{font-weight:700}
+.token-in{text-transform:uppercase;letter-spacing:.3em;text-align:center;font-weight:800;font-size:22px!important;font-variant-numeric:tabular-nums}
+.aturan{background:var(--stabilo-muda);border:1px solid #EFD98A;border-radius:9px;padding:12px 16px;font-size:14px;margin-bottom:18px}
+.aturan ul{margin:6px 0 0;padding-left:18px}
+.aturan li{margin:3px 0}
+
+/* layar ujian */
+.uj{min-height:100vh;display:flex;flex-direction:column}
+.uj-top{background:var(--seragam);color:#fff;display:flex;align-items:center;gap:12px;padding:8px 14px;position:sticky;top:0;z-index:30;min-height:58px}
+.uj-top .judul{min-width:0;flex:1}
+.uj-top .judul b{display:block;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.uj-top .judul span{font-size:12px;color:#CDD2D8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.timer{background:#fff;color:var(--teks);border-radius:8px;padding:4px 12px;text-align:center;min-width:104px}
+.timer small{display:block;font-size:10.5px;color:var(--teks-2);font-weight:600;line-height:1.2}
+.timer b{font-size:20px;font-variant-numeric:tabular-nums;letter-spacing:.02em;line-height:1.2}
+.timer.kuning{background:var(--stabilo)}
+.timer.merah{background:var(--tinta);color:#fff}.timer.merah small{color:#fff}
+.btn-keluar-app{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;min-height:40px;min-width:40px;font-size:18px;cursor:pointer}
+.btn-daftar{display:none;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:8px;min-height:40px;padding:0 12px;font-weight:700;cursor:pointer}
+.uj-main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;max-width:1240px;width:100%;margin:0 auto;padding:18px 18px 110px}
+.kertas{background:#fff;border:1px solid var(--garis);border-radius:12px;position:relative;min-height:60vh;user-select:none;-webkit-user-select:none}
+.kertas:before{content:"";position:absolute;left:58px;top:0;bottom:0;width:1.5px;background:var(--tinta);opacity:.35}
+.kertas-head{display:flex;align-items:center;gap:12px;padding:14px 18px 12px 18px;border-bottom:1px solid var(--garis-2)}
+.no-soal{width:44px;height:44px;border-radius:50%;background:var(--grafit);color:#fff;display:grid;place-items:center;font-weight:800;font-size:17px;flex:none;font-variant-numeric:tabular-nums;position:relative;z-index:1}
+.kertas-head .ket{flex:1;min-width:0}
+.kertas-head .ket b{display:block;font-size:14px}
+.kertas-head .ket span{font-size:13px;color:var(--teks-2)}
+.fs{display:inline-flex;border:1px solid var(--garis);border-radius:8px;overflow:hidden}
+.fs button{border:0;background:#fff;width:38px;height:34px;cursor:pointer;font-weight:700;color:var(--teks-2)}
+.fs button+button{border-left:1px solid var(--garis)}
+.fs button.on{background:var(--grafit);color:#fff}
+.kertas-body{padding:18px 22px 26px 78px}
+.soal{font-family:var(--font-soal);line-height:1.75;font-size:var(--fz,17px)}
+.soal .stim{background:#F7F8F9;border-left:3px solid var(--garis);padding:12px 16px;margin-bottom:16px;border-radius:0 8px 8px 0;font-size:.94em;max-height:46vh;overflow:auto;user-select:none}
+.soal .teks{margin-bottom:14px}
+.soal .gbr{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 16px}
+.soal .gbr img{max-width:100%;max-height:360px;border-radius:6px;border:1px solid var(--garis-2);cursor:zoom-in}
+.petunjuk{font-family:var(--font);font-size:13.5px;font-weight:700;color:var(--teks-2);margin-bottom:10px}
+.opsi{display:flex;gap:14px;align-items:flex-start;padding:11px 14px;border:1.5px solid var(--garis-2);border-radius:11px;margin-bottom:10px;cursor:pointer;background:#fff;width:100%;text-align:left;font-family:inherit;font-size:inherit;line-height:inherit}
+.opsi:hover{border-color:var(--garis)}
+.opsi.pilih{border-color:var(--grafit);background:#F5F6F7}
+.opsi .t{flex:1;min-width:0;padding-top:4px}
+.opsi img{max-width:100%;max-height:200px;display:block;margin-top:6px;border-radius:5px}
+.bub{width:36px;height:36px;border-radius:50%;border:1.8px solid var(--tinta);color:var(--tinta);display:inline-grid;place-items:center;font-weight:700;font-size:14px;background:#fff;flex:none;font-family:var(--font);font-variant-numeric:tabular-nums;padding:0;cursor:pointer}
+.bub.isi{background:var(--grafit);border-color:var(--grafit);color:#fff}
+.bub.ragu{background:var(--stabilo);border-color:#C9A300;color:var(--teks)}
+.bub.aktif{box-shadow:0 0 0 3px #fff,0 0 0 5px var(--tinta)}
+.bub.kotak{border-radius:8px}
+.tbl-bs{width:100%;border-collapse:collapse;font-size:.95em}
+.tbl-bs td,.tbl-bs th{border:1px solid var(--garis);padding:10px 12px;vertical-align:middle}
+.tbl-bs th{font-family:var(--font);font-size:13px;background:#FAFBFC}
+.tbl-bs td.c{text-align:center;width:92px;padding:6px}
+.tbl-bs .rb{width:40px;height:40px;border-radius:50%;border:1.8px solid var(--tinta);background:#fff;cursor:pointer}
+.tbl-bs .rb.on{background:var(--grafit);border-color:var(--grafit)}
+.kanan-box{border:1.5px dashed var(--garis);border-radius:10px;padding:10px 14px;margin-bottom:10px;background:#FAFBFC}
+.kb-judul{font-family:var(--font);font-size:12.5px;font-weight:700;color:var(--teks-2);margin-bottom:4px}
+.kb-item{display:flex;gap:10px;align-items:baseline;padding:3px 0}
+.kb-h{font-family:var(--font);font-weight:800;color:var(--tinta);min-width:18px}
+.jodoh-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px dashed var(--garis)}
+.jodoh-row select{font-family:var(--font);font-size:15px;width:100%;height:46px;border:1.5px solid var(--garis);border-radius:9px;padding:0 10px;background:#fff}
+.jodoh-row select.ada{border-color:var(--grafit);background:#F5F6F7}
+.isian{font-family:var(--font);width:100%;height:50px;border:1.5px solid var(--garis);border-radius:9px;padding:0 14px;font-size:17px;user-select:text;-webkit-user-select:text}
+.uraian{font-family:var(--font-soal);width:100%;min-height:200px;border:1.5px solid var(--garis);border-radius:9px;padding:12px 14px;font-size:16px;line-height:1.6;resize:vertical;user-select:text;-webkit-user-select:text}
+.isian:focus,.uraian:focus{border-color:var(--grafit);outline:none}
+.urut-row{display:flex;gap:10px;align-items:center;border:1.5px solid var(--garis-2);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:#fff}
+.urut-row .n{font-family:var(--font);font-weight:800;color:var(--tinta);width:24px;text-align:center}
+.urut-row .t{flex:1}
+.urut-row button{width:42px;height:40px;border:1px solid var(--garis);border-radius:8px;background:#fff;cursor:pointer;font-size:17px}
+.urut-row button:disabled{opacity:.35}
+.sisa-char{font-family:var(--font);font-size:12px;color:var(--teks-3);text-align:right;margin-top:4px}
+
+.uj-foot{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--garis);z-index:25;padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
+.uj-foot .isi{max-width:1240px;margin:0 auto;display:flex;align-items:center;gap:10px}
+.ragu-btn{display:inline-flex;align-items:center;gap:10px;min-height:44px;padding:0 16px;border-radius:9px;border:1.5px solid #E2C55A;background:#fff;cursor:pointer;font-weight:700;margin:0 auto}
+.ragu-btn .kotak{width:20px;height:20px;border-radius:5px;border:2px solid #C9A300;display:grid;place-items:center;font-size:13px;line-height:1}
+.ragu-btn.on{background:var(--stabilo);border-color:#C9A300}
+.ragu-btn.on .kotak{background:var(--grafit);border-color:var(--grafit);color:#fff}
+
+.ljk{background:#fff;border:1.5px solid var(--tinta);border-radius:12px;padding:14px 14px 16px;position:sticky;top:76px;align-self:start}
+.ljk h3{font-size:14px;color:var(--tinta);display:flex;justify-content:space-between;align-items:baseline}
+.ljk h3 span{color:var(--teks-2);font-weight:600;font-size:12.5px}
+.ljk-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px 6px;justify-items:center;margin:14px 0;max-height:52vh;overflow:auto;padding:4px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--teks-2);margin-bottom:12px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--tinta);vertical-align:-2px;margin-right:5px}
+.legend i.isi{background:var(--grafit);border-color:var(--grafit)}
+.legend i.ragu{background:var(--stabilo);border-color:#C9A300}
+.sync{font-size:12px;color:var(--teks-2);margin-top:10px;display:flex;gap:6px;align-items:center}
+.sync i{width:8px;height:8px;border-radius:50%;background:#33A06F;display:inline-block}
+.sync.off i{background:var(--merah)} .sync.proses i{background:var(--stabilo)}
+.scrim{display:none}
+
+.modal-bg{position:fixed;inset:0;background:rgba(30,34,39,.6);display:grid;place-items:center;padding:18px;z-index:60;overflow:auto}
+.modal{background:#fff;border-radius:14px;width:100%;max-width:460px;padding:22px 22px 18px}
+.modal h2{font-size:19px;margin-bottom:8px}
+.modal p{margin-bottom:12px}
+.modal .aksi{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.daftar-no{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px}
+.daftar-no button{min-width:36px;height:32px;border-radius:7px;border:1px solid var(--garis);background:#fff;cursor:pointer;font-weight:700;font-variant-numeric:tabular-nums}
+.check{display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin-top:6px}
+.check input{width:20px;height:20px;accent-color:var(--grafit);margin-top:1px}
+.peringatan h2{color:var(--merah)}
+.zoom{position:fixed;inset:0;background:rgba(0,0,0,.85);display:grid;place-items:center;z-index:70;padding:12px}
+.zoom img{max-width:100%;max-height:100%;background:#fff;border-radius:6px}
+.fs-banner{background:var(--stabilo-muda);border-bottom:1px solid #EFD98A;padding:8px 14px;font-size:13.5px;display:flex;gap:10px;align-items:center;justify-content:center}
+
+.selesai-box{max-width:460px;margin:8vh auto;background:#fff;border-radius:14px;padding:30px 28px;text-align:center;border:1px solid var(--garis)}
+.selesai-box .centang{width:64px;height:64px;border-radius:50%;background:var(--grafit);margin:0 auto 16px;display:grid;place-items:center}
+.selesai-box h1{font-size:22px;margin-bottom:6px}
+.nilai{font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;margin:16px 0 4px;color:var(--teks)}
+.toasts{position:fixed;top:70px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:90;width:max-content;max-width:92vw}
+.toast{background:var(--grafit);color:#fff;padding:11px 16px;border-radius:9px;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+.toast.err{background:var(--merah)}
+
+@media (max-width:900px){
+  .uj-main{grid-template-columns:1fr;padding:12px 10px 110px}
+  .btn-daftar{display:inline-flex;align-items:center}
+  .ljk{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:50;border-radius:16px 16px 0 0;border-width:2px 0 0;transform:translateY(105%);transition:transform .2s;max-height:80vh;overflow:auto;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+  .ljk.buka{transform:none}
+  .scrim.buka{display:block;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:45}
+  .kertas:before{left:16px}
+  .kertas-body{padding:16px 14px 22px 30px}
+  .uj-top .judul span{display:none}
+  .uj-top>.mark{display:none}
+  .timer{min-width:88px;padding:3px 8px}
+  .timer b{font-size:18px}
+  .uj-foot .lbl{display:none}
+}
+@media (prefers-reduced-motion:reduce){.ljk{transition:none}}
+</style>
+</head>
+<body>
+<div id="app" v-cloak></div>
+
+<script type="text/x-template" id="t-root">
+  <!-- LOGIN -->
+  <div class="login" v-if="layar==='login'">
+    <div class="lembar">
+      <div class="lembar-head">
+        <div><span class="mark"><i></i><i class="on"></i><i></i><i></i></span><b>{{ sekolah.namaSekolah || 'Ujian CBT' }}</b><span>Masuk untuk mengerjakan ujian</span></div>
+      </div>
+      <form class="lembar-body" @submit.prevent="masuk">
+        <p class="muted">Gunakan NIS dan kata sandi dari kartu login. Kata sandi awal sama dengan NIS.</p>
+        <div class="err" v-if="err">{{ err }}</div>
+        <label class="field"><span>NIS</span><input v-model.trim="f.nis" inputmode="text" autocomplete="username" autocapitalize="none" required></label>
+        <label class="field"><span>Kata sandi</span><input type="password" v-model="f.pw" autocomplete="current-password" required></label>
+        <button class="btn btn-primary btn-block" :disabled="sibuk">{{ sibuk ? 'Memeriksa…' : 'Masuk' }}</button>
+        <p class="small muted" style="margin-top:14px" v-if="!apiSiap">Alamat server belum diatur (API_URL).</p>
+        <button type="button" class="btn btn-block" style="margin-top:10px" v-if="app" @click="mintaKeluarApp">Tutup aplikasi</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- DAFTAR UJIAN -->
+  <template v-else-if="layar==='daftar'">
+    <div class="bar-atas">
+      <span class="mark"><i></i><i class="on"></i><i></i></span>
+      <b>{{ sekolah.namaSekolah }}</b>
+      <div class="who"><b>{{ user.nama }}</b>{{ user.nis }} · {{ user.kelas }}</div>
+      <button class="btn" @click="keluar">Keluar</button>
+      <button class="btn" v-if="app" @click="mintaKeluarApp">Tutup aplikasi</button>
+    </div>
+    <div class="wadah">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+        <div><h1>Ujian Anda</h1><p class="muted">Ujian untuk kelas {{ user.kelas }}. Daftar diperbarui otomatis.</p></div>
+        <button class="btn btn-sm" @click="muatDaftar()">Segarkan</button>
+      </div>
+      <div class="err" v-if="err" style="margin-top:14px">{{ err }}</div>
+      <div v-if="!daftar" class="kosong">Memuat…</div>
+      <div v-else-if="!daftar.length" class="kosong"><b>Tidak ada ujian hari ini</b>Belum ada ujian yang dijadwalkan untuk kelas Anda pada hari ini.</div>
+      <div class="kartu" v-for="u in daftar" :key="u.id">
+        <div class="info">
+          <div class="mapel">{{ u.mapel }}</div>
+          <h3>{{ u.nama }}</h3>
+          <div class="waktu">{{ fmtHari(u.mulai) }}, {{ fmtJam(u.mulai) }}–{{ fmtJam(u.selesai) }} · {{ u.durasi }} menit · {{ u.jumlahSoal }} soal</div>
+        </div>
+        <template v-if="u.status==='selesai'"><span class="chip chip-hijau">Selesai<template v-if="u.nilai!==undefined"> · nilai {{ u.nilai }}<template v-if="u.perluKoreksi">*</template></template></span></template>
+        <button v-else-if="u.status==='mengerjakan'" class="btn btn-tinta" @click="pilih(u)">Lanjutkan</button>
+        <template v-else-if="u.jadwal==='berlangsung'"><button class="btn btn-primary" @click="pilih(u)">Mulai</button></template>
+        <span v-else-if="u.jadwal==='akan'" class="chip chip-abu">Dibuka {{ hitungMundur(u.mulai) }}</span>
+        <span v-else class="chip chip-abu">Ditutup</span>
+      </div>
+      <p class="small muted" style="margin-top:16px" v-if="daftar && daftar.some(u=>u.perluKoreksi)">* Nilai sementara, soal uraian masih dikoreksi guru.</p>
+    </div>
+  </template>
+
+  <!-- KONFIRMASI -->
+  <template v-else-if="layar==='konfirmasi'">
+    <div class="bar-atas"><span class="mark"><i></i><i class="on"></i><i></i></span><b>Konfirmasi ujian</b></div>
+    <div class="wadah" style="max-width:520px">
+      <div class="lembar" style="max-width:none;border:1px solid var(--garis)">
+        <div class="lembar-head"><div><span>{{ pilihan.mapel }}</span><b style="margin-top:2px">{{ pilihan.nama }}</b></div></div>
+        <form class="lembar-body" @submit.prevent="mulai(false)">
+          <table class="tbl-data"><tbody>
+            <tr><td>Nama</td><td>{{ user.nama }}</td></tr>
+            <tr><td>NIS / kelas</td><td>{{ user.nis }} / {{ user.kelas }}</td></tr>
+            <tr><td>Jumlah soal</td><td>{{ pilihan.jumlahSoal }}</td></tr>
+            <tr><td>Waktu pengerjaan</td><td>{{ pilihan.durasi }} menit</td></tr>
+            <tr><td>Ditutup pukul</td><td>{{ fmtJam(pilihan.selesai) }}</td></tr>
+          </tbody></table>
+          <div class="aturan">
+            <b>Sebelum mulai</b>
+            <ul>
+              <li>Waktu berjalan sejak tombol mulai ditekan dan tidak berhenti meski halaman ditutup.</li>
+              <li>Jangan keluar dari halaman ini atau membuka aplikasi lain. Setiap kali keluar akan dicatat.</li>
+              <li>Jawaban tersimpan otomatis di perangkat ini. Jika koneksi putus, lanjutkan saja: jawaban dikirim saat Anda menekan <b>Selesai</b> (pastikan internet menyala saat itu).</li>
+              <li v-if="app">Aplikasi <b>terkunci</b> setelah Anda menekan <b>Mulai mengerjakan</b> dan terbuka lagi setelah jawaban terkirim. Untuk keluar lebih awal, minta <b>token keluar</b> kepada pengawas.</li>
+            </ul>
+            <p v-if="pilihan.wajibApp && !app" style="margin-top:8px;color:var(--merah,#B3261E)"><b>Ujian ini wajib dikerjakan lewat aplikasi CBT Ujian (Android/Windows).</b></p>
+            <p v-if="pilihan.keterangan" style="margin-top:8px"><b>Pesan pengawas:</b> {{ pilihan.keterangan }}</p>
+          </div>
+          <div class="err" v-if="err">{{ err }}</div>
+          <label class="field" v-if="pilihan.pakaiToken"><span>Token ujian</span><input class="token-in" v-model.trim="tokenUjian" maxlength="6" autocomplete="off" autocapitalize="characters" required placeholder="••••••"><small class="muted">Token dibacakan oleh pengawas.</small></label>
+          <div style="display:flex;gap:10px">
+            <button type="button" class="btn" @click="layar='daftar';err=''">Kembali</button>
+            <button class="btn btn-primary" style="flex:1" :disabled="sibuk">{{ sibuk ? 'Menyiapkan soal…' : (pilihan.status==='mengerjakan' ? 'Lanjutkan mengerjakan' : 'Mulai mengerjakan') }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- UJIAN -->
+  <div class="uj" v-else-if="layar==='ujian'" @contextmenu.prevent @copy.prevent @cut.prevent>
+    <div class="uj-top">
+      <span class="mark" style="color:#fff"><i></i><i class="on"></i><i></i></span>
+      <div class="judul"><b>{{ uj.ujian.nama }}</b><span>{{ user.nama }} · {{ user.nis }}</span></div>
+      <div class="timer" :class="{kuning: sisaDetik<=600 && sisaDetik>300, merah: sisaDetik<=300}" role="timer" aria-live="off">
+        <small>Sisa waktu</small><b>{{ sisaTeks }}</b>
+      </div>
+      <button class="btn-daftar" @click="ljkBuka=true">Daftar soal</button>
+      <button class="btn-keluar-app" v-if="app" @click="mintaKeluarApp" aria-label="Keluar aplikasi" title="Keluar aplikasi (perlu token keluar)">⏻</button>
+    </div>
+    <div class="fs-banner" v-if="perluFullscreen"><span>Mode layar penuh tertutup.</span><button class="btn btn-sm" @click="layarPenuh">Kembali ke layar penuh</button></div>
+    <div class="uj-main">
+      <section class="kertas">
+        <div class="kertas-head">
+          <span class="no-soal">{{ idx+1 }}</span>
+          <div class="ket"><b>Soal {{ idx+1 }} dari {{ uj.soal.length }}</b><span>{{ namaTipe(soal.tipe) }}<template v-if="soal.bobot!==1"> · bobot {{ soal.bobot }}</template></span></div>
+          <div class="fs" aria-label="Ukuran huruf">
+            <button v-for="(z,i) in [16,18,21]" :key="z" :class="{on: fz===z}" @click="setFz(z)" :aria-label="'Ukuran huruf ' + (i+1)" :style="{fontSize: (12+i*2)+'px'}">A</button>
+          </div>
+        </div>
+        <div class="kertas-body">
+          <div class="soal" :style="{'--fz': fz+'px'}" :key="soal.id">
+            <div class="stim" v-if="soal.stimulus" v-html="fmt(soal.stimulus)" v-math></div>
+            <div class="teks" v-html="fmt(soal.teks)" v-math></div>
+            <div class="gbr" v-if="soal.gambar && soal.gambar.length"><img v-for="g in soal.gambar" :key="g" :src="g" alt="Gambar soal" @click="zoom=g"></div>
+            <div class="petunjuk">{{ petunjuk(soal.tipe) }}</div>
+
+            <template v-if="soal.tipe==='pg' || soal.tipe==='pgk'">
+              <button v-for="(o,i) in soal.opsi" :key="o.id" class="opsi" :class="{pilih: dipilih(o.id)}" @click="pilihOpsi(o.id)" :aria-pressed="dipilih(o.id)">
+                <span class="bub" :class="{isi: dipilih(o.id), kotak: soal.tipe==='pgk'}">{{ huruf(i) }}</span>
+                <span class="t"><span v-html="fmt(o.teks)" v-math></span><img v-if="o.gambar" :src="o.gambar" alt="" @click.stop="zoom=o.gambar"></span>
+              </button>
+            </template>
+
+            <table class="tbl-bs" v-if="soal.tipe==='bs'">
+              <thead><tr><th>Pernyataan</th><th>{{ soal.label[0] }}</th><th>{{ soal.label[1] }}</th></tr></thead>
+              <tbody><tr v-for="p in soal.pernyataan" :key="p.id">
+                <td v-html="fmt(p.teks)" v-math></td>
+                <td class="c"><button class="rb" :class="{on: objVal[p.id]===true}" @click="setObj(p.id,true)" :aria-label="soal.label[0]" :aria-pressed="objVal[p.id]===true"></button></td>
+                <td class="c"><button class="rb" :class="{on: objVal[p.id]===false}" @click="setObj(p.id,false)" :aria-label="soal.label[1]" :aria-pressed="objVal[p.id]===false"></button></td>
+              </tr></tbody>
+            </table>
+
+            <div v-if="soal.tipe==='jodoh'">
+              <div class="kanan-box">
+                <div class="kb-judul">Pilihan pasangan</div>
+                <div class="kb-item" v-for="(r,i) in soal.kanan" :key="r.id"><span class="kb-h">{{ hurufKanan(i) }}</span><span v-html="fmt(r.teks)" v-math></span></div>
+              </div>
+              <div class="jodoh-row" v-for="k in soal.kiri" :key="k.id">
+                <div v-html="fmt(k.teks)" v-math></div>
+                <select :class="{ada: objVal[k.id]}" :value="objVal[k.id]||''" @change="setObj(k.id,$event.target.value)"><option value="">— pilih —</option><option v-for="(r,i) in soal.kanan" :key="r.id" :value="r.id">{{ hurufKanan(i) }}. {{ polos(r.teks) }}</option></select>
+              </div>
+            </div>
+
+            <input v-if="soal.tipe==='isian'" class="isian" :value="jawabSaat||''" @input="setJawab($event.target.value)" placeholder="Ketik jawaban di sini" autocomplete="off" spellcheck="false" @paste.prevent>
+
+            <div v-if="soal.tipe==='urut'">
+              <div class="urut-row" v-for="(id,i) in urutan" :key="id">
+                <span class="n">{{ i+1 }}</span><span class="t" v-html="fmt(opsiById(id).teks)" v-math></span>
+                <button :disabled="i===0" @click="geser(i,-1)" aria-label="Naikkan">↑</button>
+                <button :disabled="i===urutan.length-1" @click="geser(i,1)" aria-label="Turunkan">↓</button>
+              </div>
+              <button v-if="!Array.isArray(jawabSaat)" class="btn btn-sm" style="font-family:var(--font)" @click="setJawab([...urutan])">Urutan ini sudah benar</button>
+            </div>
+
+            <template v-if="soal.tipe==='uraian'">
+              <textarea class="uraian" :value="jawabSaat||''" @input="setJawab($event.target.value.slice(0,3000))" placeholder="Tulis jawaban Anda di sini" @paste.prevent></textarea>
+              <div class="sisa-char">{{ (jawabSaat||'').length }}/3000 karakter</div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <div class="scrim" :class="{buka: ljkBuka}" @click="ljkBuka=false"></div>
+      <aside class="ljk" :class="{buka: ljkBuka}" aria-label="Lembar jawaban">
+        <h3>Lembar jawaban <span>{{ jmlTerjawab }}/{{ uj.soal.length }} terjawab</span></h3>
+        <div class="ljk-grid">
+          <button v-for="(s,i) in uj.soal" :key="s.id" class="bub" :class="{isi: terjawab(s) && !ragu(s.id), ragu: ragu(s.id), aktif: i===idx}" @click="ke(i)" :aria-label="'Soal ' + (i+1)">{{ i+1 }}</button>
+        </div>
+        <div class="legend"><span><i class="isi"></i>Sudah dijawab</span><span><i class="ragu"></i>Ragu-ragu</span><span><i></i>Belum</span></div>
+        <button class="btn btn-tinta btn-block" @click="bukaSelesai">Selesai ujian</button>
+        <div class="sync" :class="{off: sync==='offline', proses: sync==='proses'}"><i></i>{{ syncTeks }}</div>
+      </aside>
+    </div>
+    <div class="uj-foot"><div class="isi">
+      <button class="btn" @click="ke(idx-1)" :disabled="idx===0">‹ <span class="lbl">Sebelumnya</span></button>
+      <button class="ragu-btn" :class="{on: ragu(soal.id)}" @click="toggleRagu"><span class="kotak">{{ ragu(soal.id) ? '✓' : '' }}</span>Ragu-ragu</button>
+      <button v-if="idx < uj.soal.length-1" class="btn btn-primary" @click="ke(idx+1)"><span class="lbl">Berikutnya</span> ›</button>
+      <button v-else class="btn btn-tinta" @click="bukaSelesai">Selesai</button>
+    </div></div>
+
+    <div class="zoom" v-if="zoom" @click="zoom=''"><img :src="zoom" alt="Gambar diperbesar"></div>
+
+    <div class="modal-bg" v-if="dlg==='selesai'" @click.self="dlg=''">
+      <div class="modal">
+        <h2>Selesaikan ujian?</h2>
+        <p>Anda menjawab <b>{{ jmlTerjawab }}</b> dari {{ uj.soal.length }} soal.</p>
+        <template v-if="belumNo.length"><p class="small" style="margin-bottom:2px"><b>Belum dijawab:</b></p><div class="daftar-no"><button v-for="n in belumNo" :key="n" @click="ke(n-1);dlg=''">{{ n }}</button></div></template>
+        <template v-if="raguNo.length"><p class="small" style="margin-bottom:2px"><b>Masih ragu-ragu:</b></p><div class="daftar-no"><button v-for="n in raguNo" :key="n" style="background:var(--stabilo-muda)" @click="ke(n-1);dlg=''">{{ n }}</button></div></template>
+        <p class="small muted">Setelah dikirim, jawaban tidak bisa diubah.</p>
+        <label class="check"><input type="checkbox" v-model="yakin"><span>Saya yakin dan ingin mengirim jawaban sekarang</span></label>
+        <div class="aksi"><button class="btn" @click="dlg=''">Periksa lagi</button><button class="btn btn-tinta" :disabled="!yakin" @click="kirim('')">Kirim jawaban</button></div>
+      </div>
+    </div>
+    <div class="modal-bg" v-if="dlg==='langgar'">
+      <div class="modal peringatan">
+        <h2>Anda keluar dari halaman ujian</h2>
+        <p>Kejadian ini tercatat <b>{{ pelanggaran }}</b> kali<template v-if="uj.ujian.maxPelanggaran"> dari batas {{ uj.ujian.maxPelanggaran }}. Jika mencapai batas, jawaban Anda dikirim otomatis</template>.</p>
+        <p class="small muted">Tetap di halaman ini sampai selesai mengerjakan.</p>
+        <div class="aksi"><button class="btn btn-primary" @click="dlg='';layarPenuh()">Lanjutkan mengerjakan</button></div>
+      </div>
+    </div>
+    <div class="modal-bg" v-if="dlg==='kirim'">
+      <div class="modal">
+        <h2>{{ alasanKirim ? alasanKirim : 'Mengirim jawaban' }}</h2>
+        <p v-if="!gagalKirim">Mengirim jawaban ke server… Jangan tutup halaman ini.</p>
+        <template v-else><p>Jawaban belum terkirim karena tidak ada internet. Jawaban Anda aman tersimpan di perangkat ini dan dikirim otomatis begitu internet menyala. Jangan hapus data browser.</p>
+          <div class="aksi"><button class="btn btn-tinta" @click="kirim(alasanKirim)">Coba kirim lagi</button></div></template>
+      </div>
+    </div>
+  </div>
+
+  <!-- SELESAI -->
+  <template v-else-if="layar==='selesai'">
+    <div class="bar-atas"><span class="mark"><i></i><i class="on"></i><i></i></span><b>{{ sekolah.namaSekolah }}</b></div>
+    <div class="wadah">
+      <div class="selesai-box">
+        <div class="centang"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></div>
+        <h1>Jawaban terkirim</h1>
+        <p class="muted">{{ hasil.nama }}<br>dikirim pukul {{ fmtJam(hasil.selesai) }}<template v-if="hasil.alasan"> ({{ hasil.alasan }})</template></p>
+        <template v-if="hasil.nilai!==undefined">
+          <div class="nilai">{{ hasil.nilai }}</div>
+          <p class="muted">{{ hasil.benar }} dari {{ hasil.jumlahSoal }} soal dijawab benar penuh.<template v-if="hasil.perluKoreksi"><br>Nilai masih sementara: {{ hasil.perluKoreksi }} soal uraian akan dikoreksi guru.</template></p>
+        </template>
+        <p v-else class="muted" style="margin-top:12px">Nilai akan diumumkan oleh guru.</p>
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:22px;flex-wrap:wrap">
+          <button class="btn btn-primary" @click="keDaftar">Kembali ke daftar ujian</button>
+          <button class="btn" @click="keluar">Keluar</button>
+          <button class="btn" v-if="app" @click="mintaKeluarApp">Tutup aplikasi</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <div class="modal-bg" v-if="dlgApp" @click.self="dlgApp=false">
+    <form class="modal" @submit.prevent="konfirmasiKeluarApp">
+      <template v-if="layar==='ujian' && uj">
+        <h2>Keluar dari aplikasi ujian</h2>
+        <p>Ujian masih berlangsung. Keluar hanya bisa dengan <b>token keluar</b> dari pengawas. Jawaban Anda tetap tersimpan di perangkat dan ujian dilanjutkan saat aplikasi dibuka lagi.</p>
+        <label class="field"><span>Token keluar</span><input class="token-in" v-model.trim="keluarToken" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="••••••" v-focus></label>
+        <div class="err" v-if="keluarErr">{{ keluarErr }}</div>
+      </template>
+      <template v-else><h2>Tutup aplikasi?</h2><p>Aplikasi CBT Ujian akan ditutup.</p></template>
+      <div class="aksi"><button type="button" class="btn" @click="dlgApp=false">Batal</button><button class="btn btn-tinta" :disabled="keluarSibuk">{{ keluarSibuk ? 'Memeriksa…' : 'Keluar' }}</button></div>
+    </form>
+  </div>
+
+  <div class="toasts" aria-live="polite"><div v-for="t in toasts" :key="t.id" class="toast" :class="t.tipe">{{ t.pesan }}</div></div>
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.45/dist/vue.global.prod.js"></script>
+<script>window.Vue || document.write('<script src="https://unpkg.com/vue@3.5.45/dist/vue.global.prod.js"><\/script>')</script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.19.1/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.19.1/dist/contrib/auto-render.min.js"></script>
+<script>
+/* =====================================================================
+   PENGATURAN
+   Bila aplikasi ini dibuka dari alamat server yang sama (…/siswa/), biarkan '/api'.
+   Bila di-hosting di tempat lain, isi alamat lengkap server, contoh:
+   const API_URL = 'https://alamat-server-anda/api';
+   ===================================================================== */
+const API_URL = window.CBT_API_URL || '/api';
+
+// HEMAT KUOTA: 1 kali ujian = 1 request. Koneksi dibuka sekali (login/mulai) dan TIDAK disambung ulang selama ujian.
+// Jawaban disimpan di perangkat dan dikirim saat Selesai. Selama koneksi masih terbuka, cadangan jawaban ikut dikirim
+// tiap 5 menit (tidak menambah request). Bila koneksi sempat putus, menekan Selesai membuka 1 koneksi baru.
+const SIMPAN_DETIK = window.CBT_SIMPAN_DETIK || 300;
+const DAFTAR_MENIT = 15;         // daftar ujian disegarkan tiap 15 menit, hanya bila koneksi masih terbuka
+const KIRIM_ULANG_DETIK = 120;   // jawaban belum terkirim (offline): dicoba lagi tiap 2 menit & saat internet kembali
+const WS_URL = (() => {
+  try { const u = new URL(API_URL, location.href); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'; u.pathname = u.pathname.replace(/\/+$/, '') + '/ws'; u.search = ''; return u.href; }
+  catch (e) { return ''; }
+})();
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function fmt(s) {
+  let h = esc(s); const m = [];
+  h = h.replace(/\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)/g, x => { m.push(x); return '\u0001' + (m.length - 1) + '\u0001'; });
+  h = h.replace(/\*\*([^*]+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)\*(?!\*)/g, '$1<i>$2</i>').replace(/__([^_]+?)__/g, '<u>$1</u>').replace(/\n/g, '<br>');
+  return h.replace(/\u0001(\d+)\u0001/g, (_, i) => m[i]);
+}
+const SUP = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹', n: 'ⁿ', '-': '⁻', '+': '⁺' };
+const SIMBOL = { times: '×', cdot: '·', div: '÷', pm: '±', leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', approx: '≈', pi: 'π', alpha: 'α', beta: 'β', gamma: 'γ', theta: 'θ', lambda: 'λ', mu: 'μ', sigma: 'σ', Delta: 'Δ', infty: '∞', circ: '°', degree: '°', rightarrow: '→', to: '→', angle: '∠', triangle: '△', sum: 'Σ', percent: '%' };
+const sederhana = x => /^[\w.,]+$/.test(x) ? x : '(' + x + ')';
+/** teks polos tanpa format, rumus LaTeX sederhana diubah ke simbol (untuk <option> & ringkasan) */
+const polos = s => String(s || '')
+  .replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, (_, a, b) => sederhana(a) + '/' + sederhana(b))
+  .replace(/\\sqrt\{([^{}]*)\}/g, (_, a) => '√' + sederhana(a))
+  .replace(/\\([A-Za-z]+)/g, (m, k) => SIMBOL[k] !== undefined ? SIMBOL[k] : (k === 'left' || k === 'right' ? '' : m))
+  .replace(/\^\{([0-9n+-]+)\}|\^([0-9n])/g, (m, a, b) => [...(a || b)].map(c => SUP[c] || c).join(''))
+  .replace(/\$\$?|\\\(|\\\)|\\\\/g, '').replace(/\\[A-Za-z]+/g, '').replace(/[{}]/g, '')
+  .replace(/\*\*|__/g, '').replace(/\*/g, '').replace(/\s{2,}/g, ' ').trim();
+const huruf = i => String.fromCharCode(65 + i);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- Aplikasi CBT Ujian (Android .apk / Windows .exe) — mode terkunci seperti exambrowser ----------
+   Android: objek window.CBTAndroid (@JavascriptInterface). Windows: WebView2 (window.chrome.webview).
+   Halaman memanggil kunci() saat siswa menekan Mulai mengerjakan, buka() setelah jawaban terkirim,
+   dan tutup() setelah token keluar dari pengawas benar. Aplikasi mengirim {t:'keluar'} saat siswa
+   meninggalkan layar ujian dan {t:'tutup'} saat tombol kembali/tutup ditekan. */
+const AppUjian = (() => {
+  const A = window.CBTAndroid, W = window.chrome && window.chrome.webview;
+  const fs = new Set();
+  const terima = m => { if (typeof m === 'string') { try { m = JSON.parse(m); } catch (e) { return; } } if (m) fs.forEach(f => f(m)); };
+  if (W) W.addEventListener('message', ev => terima(ev.data));
+  window.addEventListener('cbt-app', ev => terima(ev.detail));
+  const kirimW = o => { try { W.postMessage(JSON.stringify(o)); } catch (e) {} };
+  const panggil = (nama, arg) => { try { if (A && A[nama]) return arg === undefined ? A[nama]() : A[nama](arg); if (W) kirimW({ a: nama, d: arg }); } catch (e) {} return null; };
+  return {
+    ada: !!(A || W),
+    platform: A ? 'android' : W ? 'windows' : '',
+    /** Android: izin "Tampil di atas aplikasi lain" sudah ada? Bila belum, aplikasi membuka setelannya. */
+    siap() { const r = panggil('siap'); return r === null || r === undefined || r === true || r === 'ya'; },
+    kunci(info) { panggil('kunci', JSON.stringify(info || {})); },
+    buka() { panggil('buka'); },
+    tutup() { panggil('tutup'); },
+    on(f) { fs.add(f); }
+  };
+})();
+async function sha256Hex(t) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)));
+  return [...h].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+// halaman ujian tetap bisa dibuka tanpa internet (salinan halaman & pustaka di perangkat)
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+const dtf = o => new Intl.DateTimeFormat('id-ID', o);
+const fmtJam = ms => ms ? dtf({ hour: '2-digit', minute: '2-digit' }).format(ms) : '';
+const fmtHari = ms => ms ? dtf({ weekday: 'long', day: 'numeric', month: 'long' }).format(ms) : '';
+const NAMA_TIPE = { pg: 'Pilihan ganda', pgk: 'Pilihan ganda kompleks', bs: 'Benar / salah', jodoh: 'Menjodohkan', isian: 'Isian singkat', urut: 'Mengurutkan', uraian: 'Uraian' };
+const PETUNJUK = { pg: 'Pilih satu jawaban yang paling tepat.', pgk: 'Pilih semua jawaban yang benar. Jawaban benar bisa lebih dari satu.', bs: 'Tentukan pilihan untuk setiap pernyataan.', jodoh: 'Pasangkan setiap pernyataan dengan jawaban yang tepat.', isian: 'Ketik jawaban singkat.', urut: 'Susun urutan yang benar dengan tombol panah.', uraian: 'Tulis jawaban Anda dengan lengkap dan jelas.' };
+
+let offset = 0;
+const now = () => Date.now() + offset;
+function perangkatId() {
+  let id = localStorage.getItem('cbt_perangkat');
+  if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)); localStorage.setItem('cbt_perangkat', id); }
+  return id;
+}
+let tokenSesi = localStorage.getItem('cbt_s_token') || '';
+// paket ujian yang sedang dikerjakan (soal, batas waktu, jam server) disimpan di perangkat:
+// muat ulang halaman / menutup-membuka aplikasi melanjutkan ujian TANPA menghubungi server.
+const kunciPaket = (nis, uid) => 'cbt_pk_' + nis + '_' + uid;
+function paketLokal(nis, uid) { try { const v = JSON.parse(localStorage.getItem(kunciPaket(nis, uid)) || 'null'); return v && v.paket ? v : null; } catch (e) { return null; } }
+function semuaPaket(nis) {
+  const out = [];
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i) || ''; if (k.startsWith('cbt_pk_' + nis + '_')) { const v = JSON.parse(localStorage.getItem(k) || 'null'); if (v && v.paket) out.push(v); } } } catch (e) {}
+  return out.sort((a, b) => b.paket.mulai - a.paket.mulai);
+}
+function simpanPaket(o) { try { localStorage.setItem(kunciPaket(o.nis, o.u.id), JSON.stringify(o)); return true; } catch (e) { return false; } }
+function hapusPaket(nis, uid) { try { localStorage.removeItem(kunciPaket(nis, uid)); } catch (e) {} try { sessionStorage.removeItem('cbt_aktif'); } catch (e) {} }
+let onAuthGagal = () => {};
+
+const errKuota = () => Object.assign(new Error('Server ujian mencapai batas harian. Lapor ke pengawas — jawaban Anda tetap aman di perangkat ini.'), { code: 'KUOTA' });
+/* =====================================================================
+   KONEKSI TUNGGAL (WebSocket): semua aksi lewat SATU koneksi yang dibuka
+   sekali. 1 kali buka aplikasi = 1 request kuota server. Bila koneksi
+   ini tidak tersedia, aplikasi otomatis memakai HTTP biasa.
+   ===================================================================== */
+const Sok = {
+  ws: null, membuka: null, seq: 0, tunggu: new Map(), potongan: new Map(), pendengar: new Set(), gagal: 0, aturWaktu: null,
+  tersedia() { return !!WS_URL && this.gagal < 3; },
+  terbuka() { return !!(this.ws && this.ws.readyState === 1); },
+  buka() {
+    if (this.terbuka()) return Promise.resolve();
+    if (this.membuka) return this.membuka;
+    if (!WS_URL) return Promise.reject(Object.assign(new Error('Koneksi langsung tidak tersedia'), { code: 'NET' }));
+    this.membuka = new Promise((ok, no) => {
+      let ws, jadi = false;
+      const gagal = () => { if (jadi) return; jadi = true; this.membuka = null; this.gagal++; no(Object.assign(new Error('Tidak dapat tersambung'), { code: 'NET' })); };
+      try { ws = new WebSocket(WS_URL + '?r=1'); } catch (e) { return gagal(); }
+      const batas = setTimeout(() => { gagal(); try { ws.close(); } catch (e) {} }, 8000);
+      ws.onopen = () => {
+        if (jadi) { try { ws.close(); } catch (e) {} return; }
+        jadi = true; clearTimeout(batas); this.ws = ws; this.membuka = null; this.gagal = 0; ok(); this.kabari({ t: '_buka' });
+      };
+      ws.onmessage = ev => { if (this.ws === ws) this.terima(ev.data); };
+      ws.onclose = () => {
+        clearTimeout(batas);
+        if (!jadi) return gagal();
+        if (this.ws !== ws) return;
+        this.ws = null;
+        const e = Object.assign(new Error('Koneksi terputus'), { code: 'NET' });
+        this.tunggu.forEach(p => p.no(e)); this.tunggu.clear(); this.potongan.clear();
+        this.kabari({ t: '_tutup' });
+      };
+    });
+    return this.membuka;
+  },
+  kirim(o) {
+    if (!this.terbuka()) return false;
+    try {
+      const s = JSON.stringify(o), P = 400000;
+      if (s.length <= P) this.ws.send(s);
+      else { const id = 'k' + (++this.seq), n = Math.ceil(s.length / P); for (let i = 0; i < n; i++) this.ws.send(JSON.stringify({ t: 'pt', id, i, n, s: s.slice(i * P, (i + 1) * P) })); }
+      return true;
+    } catch (e) { return false; }
+  },
+  terima(raw) {
+    let m; try { m = JSON.parse(raw); } catch (e) { return; }
+    if (m.t === 'pt') {
+      let b = this.potongan.get(m.id);
+      if (!b) this.potongan.set(m.id, b = { n: m.n, a: [], k: 0 });
+      if (b.a[m.i] === undefined) { b.a[m.i] = m.s; b.k++; }
+      if (b.k < b.n) return;
+      this.potongan.delete(m.id);
+      return this.terima(b.a.join(''));
+    }
+    if (m.now && this.aturWaktu) this.aturWaktu(m.now);
+    if (m.t === 'res') { const p = this.tunggu.get(m.id); if (p) { this.tunggu.delete(m.id); p.ok(m); } return; }
+    this.kabari(m);
+  },
+  kabari(m) { this.pendengar.forEach(f => { try { f(m); } catch (e) { console.error(e); } }); },
+  async rpc(a, d, tok, batasMs) {
+    await this.buka();
+    const id = ++this.seq;
+    return new Promise((ok, no) => {
+      const t = setTimeout(() => { this.tunggu.delete(id); no(Object.assign(new Error('Server tidak menjawab'), { code: 'NET' })); }, batasMs || 45000);
+      this.tunggu.set(id, { ok: m => { clearTimeout(t); ok(m); }, no: e => { clearTimeout(t); no(e); } });
+      if (!this.kirim({ t: 'rpc', id, a, d, tok })) { clearTimeout(t); this.tunggu.delete(id); no(Object.assign(new Error('Koneksi terputus'), { code: 'NET' })); }
+    });
+  }
+};
+const AKSI_LAMA = new Set(['imporCadangan', 'importSiswa', 'hitungUlang', 'sinkronSekarang', 'uploadGambar', 'hasilUjian', 'koreksiMassal']);
+/** Coba lewat koneksi tunggal dulu. null = tidak bisa (pakai HTTP). */
+async function apiSok(action, data, tok, onAuth) {
+  if (!Sok.tersedia()) return null;
+  for (let i = 0; i < 3; i++) {
+    let j;
+    try { j = await Sok.rpc(action, data, tok, AKSI_LAMA.has(action) ? 180000 : 45000); } catch (e) { return null; }
+    if (j.ok) return { data: j.data };
+    const e = Object.assign(new Error(j.error || 'Terjadi kesalahan'), { code: j.code });
+    if (j.code === 'AUTH') { onAuth(); throw e; }
+    if (j.code !== 'BUSY') throw e;
+    await sleep(700 * 2 ** i * (0.5 + Math.random()));
+  }
+  return null;
+}
+
+async function api(action, data = {}, opt = {}) {
+  if (!API_URL) throw new Error('Alamat server (API_URL) belum diatur');
+  if (!opt.http) { const r = await apiSok(action, data, tokenSesi, () => onAuthGagal()); if (r) return r.data; }
+  const body = JSON.stringify({ action, data, token: tokenSesi });
+  const maks = opt.retry ?? 4, batasMs = opt.maksJeda ?? 8000;
+  let terakhir;
+  for (let i = 0; i <= maks; i++) {
+    try {
+      const res = await fetch(API_URL + '?a=' + encodeURIComponent(action), { method: 'POST', body, headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+      if (res.status === 429 && !/json/.test(res.headers.get('content-type') || '')) throw errKuota();
+      const j = await res.json();
+      if (j.serverTime) offset = j.serverTime - Date.now();
+      if (j.ok) return j.data;
+      const e = new Error(j.error || 'Terjadi kesalahan'); e.code = j.code;
+      if (j.code === 'AUTH') { onAuthGagal(); throw e; }
+      if (j.code !== 'BUSY') throw e;
+      terakhir = e;
+    } catch (e) {
+      if (e.code && e.code !== 'BUSY') throw e;
+      terakhir = e.code ? e : Object.assign(new Error('Tidak dapat terhubung ke server. Periksa koneksi internet.'), { code: 'NET' });
+    }
+    if (i < maks) await sleep(Math.min(batasMs, 700 * 2 ** i) * (0.5 + Math.random()));
+  }
+  throw terakhir;
+}
+
+const antriMath = new Set();
+function renderMath(el) {
+  if (window.renderMathInElement) {
+    try { renderMathInElement(el, { delimiters: [{ left: '$$', right: '$$', display: true }, { left: '$', right: '$', display: false }, { left: '\\(', right: '\\)', display: false }], throwOnError: false }); } catch (e) {}
+  } else antriMath.add(el);
+}
+const lepasAntri = () => { antriMath.forEach(el => el.isConnected && renderMath(el)); antriMath.clear(); };
+document.addEventListener('DOMContentLoaded', lepasAntri); window.addEventListener('load', lepasAntri);
+
+const app = Vue.createApp({
+  template: '#t-root',
+  data() {
+    return {
+      layar: tokenSesi ? 'daftar' : 'login',
+      user: JSON.parse(localStorage.getItem('cbt_s_user') || 'null') || {},
+      sekolah: JSON.parse(localStorage.getItem('cbt_s_sekolah') || '{}'),
+      apiSiap: !!API_URL,
+      f: { nis: '', pw: '' }, err: '', sibuk: false, toasts: [],
+      daftar: null, pilihan: null, tokenUjian: '',
+      uj: null, idx: 0, jw: { j: {}, r: [] }, pelanggaran: 0, kotor: false, versiLokal: 0,
+      sisaDetik: 0, tik: 0, sync: 'ok', terakhirSync: 0, dlg: '', yakin: false, alasanKirim: '', gagalKirim: false,
+      ljkBuka: false, zoom: '', fz: Number(localStorage.getItem('cbt_fz') || 17), perluFullscreen: false, hasil: {},
+      app: AppUjian.ada, dlgApp: false, keluarToken: '', keluarErr: '', keluarSibuk: false
+    };
+  },
+  computed: {
+    soal() { return this.uj.soal[this.idx]; },
+    jawabSaat() { return this.jw.j[this.soal.id]; },
+    objVal() { const v = this.jawabSaat; return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; },
+    urutan() { const op = this.soal.opsi || [], v = this.jawabSaat; return Array.isArray(v) && v.length === op.length ? v : op.map(o => o.id); },
+    jmlTerjawab() { return this.uj.soal.filter(this.terjawab).length; },
+    belumNo() { return this.uj.soal.map((s, i) => this.terjawab(s) ? 0 : i + 1).filter(Boolean); },
+    raguNo() { return this.uj.soal.map((s, i) => this.ragu(s.id) ? i + 1 : 0).filter(Boolean); },
+    sisaTeks() { const s = Math.max(0, this.sisaDetik), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), d = s % 60, p = n => String(n).padStart(2, '0'); return (h ? h + ':' : '') + p(m) + ':' + p(d); },
+    syncTeks() {
+      this.tik;
+      if (this.sync === 'proses') return 'Menyimpan cadangan ke server…';
+      if (this.sync === 'lokal') return 'Jawaban tersimpan di perangkat · dikirim saat Selesai';
+      return this.terakhirSync ? 'Tersimpan di server ' + fmtJam(this.terakhirSync) : 'Jawaban tersimpan di perangkat';
+    }
+  },
+  created() {
+    this.wsMati = true; this.wsBuka = false; this.terakhirKirim = -999; this.terakhirCoba = 0;
+    Sok.aturWaktu = n => { offset = n - Date.now(); };
+    Sok.pendengar.add(m => this.pesanWs(m));
+    AppUjian.on(m => this.pesanApp(m));
+    onAuthGagal = () => { if (this.layar !== 'ujian') { this.bersihSesi(); this.layar = 'login'; this.err = 'Sesi berakhir, silakan masuk lagi.'; } };
+    // internet kembali → jawaban yang belum terkirim langsung dicoba kirim lagi
+    window.addEventListener('online', () => { if (this.dlg === 'kirim' && this.gagalKirim && !this.mengirim) this.kirim(this.alasanKirim); });
+    // ujian yang sedang berjalan dilanjutkan dari perangkat (tanpa menghubungi server)
+    const aktif = tokenSesi && this.user.nis ? semuaPaket(this.user.nis)[0] : null;
+    if (aktif) { this.pilihan = aktif.u; this.lanjutLokal(aktif, false); }
+    else if (AppUjian.ada) AppUjian.buka();   // tidak ada ujian berjalan di perangkat ini → aplikasi tidak terkunci
+    else if (this.layar === 'daftar') this.muatDaftar();
+    else if (this.apiSiap && Date.now() - Number(localStorage.getItem('cbt_s_sekolah_t') || 0) > 86400000) {
+      // nama sekolah disimpan di perangkat, ditanyakan ke server maksimal sekali sehari
+      api('ping', {}, { retry: 1 }).then(r => { this.sekolah = r; localStorage.setItem('cbt_s_sekolah', JSON.stringify(r)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now())); }).catch(() => {});
+    }
+    this.timerDaftar = setInterval(() => {
+      this.tik++;
+      if (this.layar !== 'daftar' || !this.daftar) return;
+      // status jadwal dihitung di perangkat → tidak perlu bertanya ke server tiap menit
+      const t = now();
+      this.daftar.forEach(u => { const j = t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung'; if (u.jadwal !== j) u.jadwal = j; });
+      // disegarkan hanya bila koneksi masih terbuka (tidak membuka koneksi baru = tidak menambah request)
+      if (!document.hidden && Sok.terbuka() && Date.now() - (this.daftarT || 0) > DAFTAR_MENIT * 60000 * (0.8 + Math.random() * 0.4)) this.muatDaftar(true);
+    }, 1000);
+  },
+  methods: {
+    fmt, polos, huruf, fmtJam, fmtHari, hurufKanan: i => 'PQRSTUVWXYZKLMNO'[i] || String(i + 1),
+    namaTipe: t => NAMA_TIPE[t] || t, petunjuk: t => PETUNJUK[t],
+    toast(pesan, tipe = '', lama = 3500) { const id = Math.random(); this.toasts.push({ id, pesan, tipe }); setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, lama); },
+    hitungMundur(ms) { this.tik; const s = Math.floor((ms - now()) / 1000); if (s > 86400) return fmtHari(ms) + ' ' + fmtJam(ms); if (s <= 0) return 'sebentar lagi'; const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return 'dalam ' + (h ? h + ' jam ' : '') + (m || !h ? m + ' menit' : ''); },
+
+    async masuk() {
+      this.err = ''; this.sibuk = true;
+      try {
+        const r = await api('loginSiswa', { nis: this.f.nis, password: this.f.pw }, { retry: 2 });
+        tokenSesi = r.token; this.user = r.user; this.sekolah = r.sekolah;
+        localStorage.setItem('cbt_s_token', r.token); localStorage.setItem('cbt_s_user', JSON.stringify(r.user)); localStorage.setItem('cbt_s_sekolah', JSON.stringify(r.sekolah)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now()));
+        this.f.pw = ''; this.layar = 'daftar'; this.muatDaftar();
+      } catch (e) { this.err = e.message; } finally { this.sibuk = false; }
+    },
+    bersihSesi() { tokenSesi = ''; localStorage.removeItem('cbt_s_token'); localStorage.removeItem('cbt_s_user'); },
+    keluar() { this.bersihSesi(); this.user = {}; this.daftar = null; this.layar = 'login'; },
+    async muatDaftar(diam) {
+      if (!diam) this.err = '';
+      this.daftarT = Date.now();
+      try {
+        const list = await api('ujianSaya', {}, { retry: diam ? 1 : 3 });
+        // ujian yang jawabannya masih ada di perangkat ini (belum terkirim) → tombol "Lanjutkan"
+        list.forEach(u => {
+          if (!paketLokal(this.user.nis, u.id)) return;
+          if (u.status === 'selesai' && !u.susulan) hapusPaket(this.user.nis, u.id);   // sudah diterima server
+          else u.status = 'mengerjakan';
+        });
+        this.daftar = list;
+      }
+      catch (e) { if (!diam) this.err = e.message; if (!this.daftar) this.daftar = []; }
+    },
+    pilih(u) {
+      this.pilihan = u; this.tokenUjian = ''; this.err = '';
+      if (paketLokal(this.user.nis, u.id)) return this.mulai(false);   // lanjutkan dari perangkat, tanpa token & tanpa server
+      this.layar = 'konfirmasi';
+    },
+    keDaftar() {
+      this.layar = 'daftar';
+      // koneksi masih terbuka → ambil daftar terbaru (tanpa request baru); sudah putus → perbarui di perangkat saja
+      if (Sok.terbuka() || !this.daftar) { this.daftar = null; this.muatDaftar(); return; }
+      const h = this.hasil, u = h && this.daftar.find(x => x.id === h.uid);
+      if (u) { u.status = 'selesai'; if (h.nilai !== undefined) { u.nilai = h.nilai; u.perluKoreksi = h.perluKoreksi; } }
+      this.daftar.forEach(x => { if (x.status === 'mengerjakan' && !paketLokal(this.user.nis, x.id) && x.id !== (this.pilihan && this.pilihan.id)) x.status = 'belum'; });
+    },
+
+    async mulai(otomatis) {
+      this.err = '';
+      const ada = paketLokal(this.user.nis, this.pilihan.id);
+      if (ada) return this.lanjutLokal(ada, otomatis !== true);
+      if (this.pilihan.wajibApp && !AppUjian.ada) { this.err = 'Ujian ini wajib dikerjakan lewat aplikasi CBT Ujian (Android/Windows). Minta aplikasinya kepada pengawas.'; return; }
+      if (AppUjian.ada && !AppUjian.siap()) { this.err = 'Izinkan CBT Ujian “Tampil di atas aplikasi lain” pada layar yang terbuka, kembali ke sini, lalu tekan Mulai mengerjakan lagi.'; return; }
+      this.sibuk = true;
+      try {
+        const r = await api('mulaiUjian', { ujianId: this.pilihan.id, token: this.tokenUjian, perangkat: perangkatId(), app: AppUjian.platform }, { retry: 6 });
+        const kunci = 'cbt_jw_' + this.pilihan.id + '_' + this.user.nis + '_' + r.mulai;
+        simpanPaket({ nis: this.user.nis, u: this.pilihan, kunci, paket: r, offset });
+        this.siapkan(r, kunci, otomatis !== true);
+      } catch (e) {
+        if (e.code === 'SELESAI') { this.toast(e.message); this.keDaftar(); }
+        else { this.err = e.message; if (this.layar !== 'konfirmasi') this.layar = 'konfirmasi'; }
+      } finally { this.sibuk = false; }
+    },
+    /** Lanjutkan ujian dari paket di perangkat (setelah muat ulang / tutup-buka aplikasi): tanpa menghubungi server. */
+    lanjutLokal(a, gestur) {
+      if (!Sok.terbuka() && typeof a.offset === 'number') offset = a.offset;
+      this.siapkan(a.paket, a.kunci, gestur);
+    },
+    siapkan(r, kunci, gestur) {
+      this.kunciLokal = kunci;
+      let lokal = null; try { lokal = JSON.parse(localStorage.getItem(kunci) || 'null'); } catch (e) {}
+      this.jw = lokal ? lokal.jw : (r.jawaban && r.jawaban.j ? { j: r.jawaban.j, r: r.jawaban.r || [] } : { j: {}, r: [] });
+      this.pelanggaran = Math.max(r.pelanggaran || 0, lokal ? lokal.pelanggaran || 0 : 0);
+      this.idx = lokal && lokal.idx < r.soal.length ? lokal.idx : 0;
+      this.uj = r; this.kotor = !!lokal; this.terakhirSync = 0; this.sync = 'lokal'; this.dlg = ''; this.yakin = false; this.gagalKirim = false;
+      this.layar = 'ujian';
+      if (AppUjian.ada) AppUjian.kunci({ ujianId: r.ujian.id, nama: r.ujian.nama });   // aplikasi terkunci mulai sekarang
+      this.pasangPenjaga(gestur);
+      this.hitungSisa();
+      this.wsMati = false; this.terakhirKirim = this.tik;
+      this.sambung();
+      if (this.sisaDetik <= 0) this.kirim('Waktu habis');
+    },
+    /** Pesan dari aplikasi ujian: siswa meninggalkan layar (dicatat) atau menekan tombol kembali/tutup. */
+    pesanApp(m) {
+      if (m.t === 'keluar' && this.layar === 'ujian' && this.h && this.h.langgar && !this.dlgApp) this.h.langgar();
+      else if (m.t === 'tutup') this.mintaKeluarApp();
+    },
+    mintaKeluarApp() { this.keluarToken = ''; this.keluarErr = ''; this.dlgApp = true; },
+    async konfirmasiKeluarApp() {
+      if (this.layar !== 'ujian' || !this.uj) { this.dlgApp = false; AppUjian.tutup(); return; }
+      const t = this.keluarToken.trim().toUpperCase();
+      if (!t) { this.keluarErr = 'Masukkan token keluar dari pengawas.'; return; }
+      this.keluarSibuk = true; this.keluarErr = '';
+      try {
+        const ok = this.uj.keluarHash ? (await sha256Hex(this.uj.ujian.id + ':' + t)) === this.uj.keluarHash
+          : await api('cekTokenKeluar', { ujianId: this.uj.ujian.id, token: t }, { retry: 1 });
+        if (!ok) { this.keluarErr = 'Token keluar salah.'; return; }
+        // jawaban tetap tersimpan di perangkat; saat aplikasi dibuka lagi ujian dilanjutkan
+        this.simpanLokal(); if (this.wsBuka && this.kotor) this.kirimJawaban(true);
+        this.terakhirLanggar = Date.now() + 60000; this.dlgApp = false;
+        AppUjian.tutup();
+      } catch (e) { this.keluarErr = e.message; } finally { this.keluarSibuk = false; }
+    },
+    hapusPaketIni() { const uid = this.uj ? this.uj.ujian.id : (this.pilihan && this.pilihan.id); if (uid) hapusPaket(this.user.nis, uid); },
+    layarPenuh() { const d = document.documentElement; if (!document.fullscreenElement && d.requestFullscreen) d.requestFullscreen().catch(() => {}); },
+    pasangPenjaga(gestur) {
+      if (AppUjian.ada) this.perluFullscreen = false;   // aplikasi sudah layar penuh & terkunci
+      else if (gestur) this.layarPenuh(); else this.perluFullscreen = !document.fullscreenElement && !!document.documentElement.requestFullscreen;
+      this.mulaiJaga = Date.now();
+      this.lepasPenjaga();
+      const langgar = () => {
+        if (this.layar !== 'ujian' || this.dlg === 'kirim' || Date.now() - this.mulaiJaga < 2500) return;
+        if (Date.now() - (this.terakhirLanggar || 0) < 1500) return;
+        this.terakhirLanggar = Date.now();
+        this.pelanggaran++; this.kotor = true; this.versiLokal++; this.simpanLokal();
+        if (this.wsBuka && this.tik - this.terakhirKirim >= 10) this.kirimJawaban(true);   // lewat koneksi yang masih terbuka saja
+        const maks = this.uj.ujian.maxPelanggaran;
+        if (maks && this.pelanggaran >= maks) this.kirim('Batas keluar halaman tercapai');
+        else this.dlg = 'langgar';
+      };
+      this.h = {
+        langgar,
+        vis: () => { if (document.hidden) langgar(); },
+        blur: () => langgar(),
+        fsc: () => { this.perluFullscreen = !AppUjian.ada && !document.fullscreenElement && !!document.documentElement.requestFullscreen; },
+        unload: () => { if (this.kotor && this.wsBuka) this.kirimJawaban(true); },   // jawaban tetap aman di perangkat
+        before: e => { if (this.layar === 'ujian' && this.dlg !== 'kirim') { e.preventDefault(); e.returnValue = ''; } },
+        key: e => { if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || this.dlg) return; if (e.key === 'ArrowRight') this.ke(this.idx + 1); if (e.key === 'ArrowLeft') this.ke(this.idx - 1); }
+      };
+      document.addEventListener('visibilitychange', this.h.vis); window.addEventListener('blur', this.h.blur);
+      document.addEventListener('fullscreenchange', this.h.fsc); window.addEventListener('pagehide', this.h.unload);
+      window.addEventListener('beforeunload', this.h.before); document.addEventListener('keydown', this.h.key);
+      this.tUjian = setInterval(() => {
+        this.hitungSisa(); this.tik++;
+        if (this.sisaDetik === 300) this.toast('Sisa waktu 5 menit', 'err', 5000);
+        if (this.sisaDetik <= 0 && this.dlg !== 'kirim') this.kirim('Waktu habis');
+        // cadangan jawaban hanya lewat koneksi yang masih terbuka (tidak membuka koneksi baru)
+        if (this.kotor && this.wsBuka && this.tik - this.terakhirKirim >= SIMPAN_DETIK) this.kirimJawaban();
+        // jawaban akhir belum terkirim karena offline → coba lagi berkala
+        if (this.dlg === 'kirim' && this.gagalKirim && !this.mengirim && navigator.onLine !== false && this.tik - this.terakhirCoba >= KIRIM_ULANG_DETIK) this.kirim(this.alasanKirim);
+      }, 1000);
+    },
+    // ---- koneksi langsung (WebSocket) ----
+    // Hanya memakai koneksi yang SUDAH terbuka (dibuka saat login/mulai). Selama ujian TIDAK membuka koneksi baru:
+    // bila koneksi putus, siswa tetap mengerjakan dan jawaban dikirim saat Selesai.
+    sambung() {
+      if (this.wsMati || !this.uj || this.layar !== 'ujian' || !Sok.terbuka()) { this.wsBuka = false; this.sync = 'lokal'; return; }
+      Sok.kirim({ t: 'ikut', tok: tokenSesi, u: this.uj.ujian.id, p: perangkatId() });
+    },
+    putus() {
+      this.wsMati = true;
+      if (this.wsBuka) Sok.kirim({ t: 'lepas' });   // koneksi tetap terbuka untuk daftar ujian
+      this.wsBuka = false;
+    },
+    pesanWs(m) {
+      if (m.now) offset = m.now - Date.now();
+      if (m.t === 'tik' || m.t === '_buka') return;
+      if (this.layar !== 'ujian' || !this.uj || this.wsMati) return;
+      if (m.t === '_tutup') {   // tidak disambung ulang: jawaban dikirim saat Selesai
+        this.wsBuka = false; this.sync = 'lokal';
+        if (this.tungguHasil) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
+        return;
+      }
+      if (m.t === 'perlu_ikut') { this.wsBuka = false; this.sambung(); return; }
+      if (m.t === 'err' && m.k === 'pantau') return;
+      if (m.t === 'hai') {
+        this.wsBuka = true;
+        if (m.deadline && this.uj) { this.uj.deadline = m.deadline; this.hitungSisa(); }
+        if (this.kotor) this.kirimJawaban(true); else { this.sync = 'ok'; if (!this.terakhirSync) this.terakhirSync = now(); }
+      } else if (m.t === 'ok') {
+        if (m.v === this.versiLokal) this.kotor = false;
+        this.sync = 'ok'; this.terakhirSync = now();
+        if (m.status === 'selesai') this.akhiriServer(m);
+        else if (m.status === 'direset' || m.status === 'belum') this.direset();
+        else if (m.deadline && this.uj) this.uj.deadline = m.deadline;
+      } else if (m.t === 'hasil') {
+        if (this.tungguHasil && this.tungguHasil.id === m.id) this.tungguHasil.ok(m.data);
+      } else if (m.t === 'selesai') {
+        if (this.tungguHasil) this.tungguHasil.ok(m.data); else this.akhiriServer(m.data);
+      } else if (m.t === 'reset' || (m.t === 'status' && (m.status === 'direset' || m.status === 'belum'))) {
+        this.direset();
+      } else if (m.t === 'err') {
+        if (m.id && this.tungguHasil && this.tungguHasil.id === m.id) return this.tungguHasil.gagal(m);
+        if (m.code === 'PERANGKAT') { AppUjian.buka(); this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(m.msg, 'err', 8000); this.keDaftar(); }
+        else if (m.code !== 'BUSY') { this.wsBuka = false; this.sync = 'lokal'; }
+      }
+    },
+    kirimJawaban(segera) {
+      if (!this.wsBuka) return;
+      if (Sok.kirim({ t: 'j', j: this.jw, p: this.pelanggaran, v: this.versiLokal, mulai: this.uj.mulai })) { this.terakhirKirim = this.tik; if (!segera) this.sync = 'proses'; }
+    },
+    selesaiWs(alasan) {
+      return new Promise((ok, gagal) => {
+        const id = Math.random().toString(36).slice(2);
+        const habis = setTimeout(() => this.tungguHasil && this.tungguHasil.gagal({ code: 'NET', msg: 'Tidak ada balasan' }), 15000);
+        this.tungguHasil = {
+          id,
+          ok: d => { clearTimeout(habis); this.tungguHasil = null; ok(d); },
+          gagal: m => { clearTimeout(habis); this.tungguHasil = null; gagal(Object.assign(new Error(m.msg || 'Gagal'), { code: m.code || 'NET' })); }
+        };
+        if (!Sok.kirim({ t: 'selesai', id, j: this.jw, p: this.pelanggaran, a: alasan ? alasan.toLowerCase() : '', mulai: this.uj.mulai })) this.tungguHasil.gagal({ code: 'NET', msg: 'Koneksi terputus' });
+      });
+    },
+    akhiriServer(r) { this.akhiri({ ...r, nama: this.uj ? this.uj.ujian.nama : '', alasan: /otomatis|waktu/.test(r.catatan || '') ? 'waktu habis' : (r.catatan ? 'dihentikan pengawas' : '') }); },
+    direset() { AppUjian.buka(); this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); try { localStorage.removeItem(this.kunciLokal); } catch (e) {} this.uj = null; this.toast('Ujian Anda direset oleh pengawas. Silakan mulai lagi.', 'err', 7000); this.keDaftar(); },
+    lepasPenjaga() {
+      clearInterval(this.tUjian);
+      if (!this.h) return;
+      document.removeEventListener('visibilitychange', this.h.vis); window.removeEventListener('blur', this.h.blur);
+      document.removeEventListener('fullscreenchange', this.h.fsc); window.removeEventListener('pagehide', this.h.unload);
+      window.removeEventListener('beforeunload', this.h.before); document.removeEventListener('keydown', this.h.key);
+      this.h = null;
+    },
+    hitungSisa() { if (this.uj) this.sisaDetik = Math.floor((this.uj.deadline - now()) / 1000); },
+    setFz(z) { this.fz = z; localStorage.setItem('cbt_fz', z); },
+
+    // ---- jawaban ----
+    terjawab(s) {
+      const v = this.jw.j[s.id];
+      if (v === undefined || v === null || v === '') return false;
+      if (s.tipe === 'pgk' || s.tipe === 'urut') return Array.isArray(v) && v.length > 0;
+      if (s.tipe === 'bs') return s.pernyataan.every(p => typeof v[p.id] === 'boolean');
+      if (s.tipe === 'jodoh') return s.kiri.every(k => v[k.id]);
+      return String(v).trim() !== '';
+    },
+    ragu(id) { return this.jw.r.includes(id); },
+    dipilih(id) { const v = this.jawabSaat; return this.soal.tipe === 'pg' ? v === id : (Array.isArray(v) && v.includes(id)); },
+    setJawab(v) { this.jw.j[this.soal.id] = v; this.tandaiUbah(); },
+    pilihOpsi(id) {
+      if (this.soal.tipe === 'pg') return this.setJawab(this.jawabSaat === id ? '' : id);
+      const a = Array.isArray(this.jawabSaat) ? [...this.jawabSaat] : []; const i = a.indexOf(id);
+      i >= 0 ? a.splice(i, 1) : a.push(id); this.setJawab(a);
+    },
+    setObj(k, v) { this.setJawab({ ...this.objVal, [k]: v }); },
+    opsiById(id) { return this.soal.opsi.find(o => o.id === id) || { teks: '' }; },
+    geser(i, d) { const a = [...this.urutan]; [a[i], a[i + d]] = [a[i + d], a[i]]; this.setJawab(a); },
+    toggleRagu() { const i = this.jw.r.indexOf(this.soal.id); i >= 0 ? this.jw.r.splice(i, 1) : this.jw.r.push(this.soal.id); this.tandaiUbah(); },
+    ke(i) { if (i < 0 || i >= this.uj.soal.length) return; this.idx = i; this.ljkBuka = false; window.scrollTo({ top: 0 }); this.simpanLokal(); },
+    tandaiUbah() { this.kotor = true; this.versiLokal++; this.simpanLokal(); },
+    simpanLokal() { try { localStorage.setItem(this.kunciLokal, JSON.stringify({ jw: this.jw, pelanggaran: this.pelanggaran, idx: this.idx, t: Date.now() })); } catch (e) {} },
+    dataSync() { return { ujianId: this.uj.ujian.id, jawaban: this.jw, pelanggaran: this.pelanggaran, perangkat: perangkatId(), mulai: this.uj.mulai }; },
+    async syncServer(diam) {
+      if (this.syncJalan || !this.uj) return;
+      this.syncJalan = true; const versi = this.versiLokal;
+      if (!diam) this.sync = 'proses';
+      try {
+        const r = await api('simpanJawaban', this.dataSync(), { retry: 1 });
+        if (this.versiLokal === versi) this.kotor = false;
+        this.sync = 'ok'; this.terakhirSync = now();
+        if (r.status === 'selesai') this.akhiriServer(r);
+        else if (r.status === 'direset' || r.status === 'belum') this.direset();
+        else if (r.deadline) this.uj.deadline = r.deadline;
+      } catch (e) {
+        if (e.code === 'PERANGKAT') { AppUjian.buka(); this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(e.message, 'err', 8000); this.keDaftar(); }
+        else this.sync = 'lokal';
+      } finally { this.syncJalan = false; }
+    },
+    bukaSelesai() { this.ljkBuka = false; this.yakin = false; this.dlg = 'selesai'; },
+    async kirim(alasan) {
+      if (this.mengirim) return;
+      this.mengirim = true; this.alasanKirim = alasan; this.gagalKirim = false; this.dlg = 'kirim'; this.terakhirCoba = this.tik;
+      if (alasan === 'Waktu habis') await sleep(Math.random() * 8000); // sebar beban saat semua siswa habis waktu bersamaan
+      try {
+        let r = null;
+        if (this.wsBuka && Sok.terbuka()) {
+          try { r = await this.selesaiWs(alasan); }
+          catch (e) { if (e.code && e.code !== 'NET' && e.code !== 'BUSY') throw e; r = null; }
+        }
+        // koneksi sempat putus → buka 1 koneksi baru khusus untuk mengirim jawaban akhir
+        if (!r) r = await api('selesaiUjian', { ...this.dataSync(), alasan: alasan ? alasan.toLowerCase() : '' }, { retry: 3, maksJeda: 15000 });
+        this.akhiri({ ...r, nama: this.uj.ujian.nama, alasan: alasan ? alasan.toLowerCase() : '' });
+      } catch (e) {
+        if (e.code === 'PERANGKAT') { AppUjian.buka(); this.putus(); this.lepasPenjaga(); this.hapusPaketIni(); this.toast(e.message, 'err', 8000); this.keDaftar(); }
+        else if (e.code === 'DIRESET') this.direset();
+        else if (e.code === 'AUTH') {   // sesi login kedaluwarsa: masuk lagi, jawaban tetap di perangkat lalu dikirim
+          this.lepasPenjaga(); this.uj = null; this.dlg = ''; this.bersihSesi(); this.layar = 'login';
+          this.err = 'Sesi berakhir. Masuk lagi untuk mengirim jawaban yang tersimpan di perangkat ini.';
+        }
+        else { this.gagalKirim = true; this.terakhirCoba = this.tik; }
+      } finally { this.mengirim = false; }
+    },
+    akhiri(hasil) {
+      if (this.layar !== 'ujian' && !this.uj) return;
+      this.putus();
+      this.lepasPenjaga();
+      this.hapusPaketIni();
+      try { localStorage.removeItem(this.kunciLokal); } catch (e) {}
+      if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      AppUjian.buka();   // jawaban sudah diterima server → aplikasi tidak terkunci lagi
+      this.hasil = { ...hasil, uid: this.uj ? this.uj.ujian.id : '' }; this.dlg = ''; this.uj = null; this.layar = 'selesai';
+    }
+  }
+});
+app.directive('math', { mounted: el => renderMath(el), updated: el => renderMath(el) });
+app.directive('focus', { mounted: el => setTimeout(() => el.focus(), 30) });
+app.mount('#app');
+</script>
+</body>
+</html>

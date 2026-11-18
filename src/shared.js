@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.6.0-CBT';
+export const VERSI = '2.7.0-CBT';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -106,6 +106,18 @@ async function hmacKey(secret) {
   if (!k) { k = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); KEYS.set(secret, k); }
   return k;
 }
+/** Token keluar aplikasi ujian (Android/Windows) per jadwal: diturunkan dari rahasia server, tetap, tidak perlu disimpan. */
+export async function tokenKeluar_(ujianId, secret) {
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), enc.encode('keluar:' + ujianId)));
+  const huruf = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = '';
+  for (let i = 0; i < 6; i++) s += huruf.charAt(sig[i] % huruf.length);
+  return s;
+}
+/** Sidik token keluar yang dibawa paket siswa: aplikasi bisa memeriksa token tanpa internet. */
+export async function hashKeluar_(ujianId, token) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(ujianId + ':' + String(token || '').trim().toUpperCase())));
+  return [...h].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 export async function signToken_(payload, secret) {
   const body = b64u(enc.encode(JSON.stringify(payload)));
   const sig = b64u(await crypto.subtle.sign('HMAC', await hmacKey(secret), enc.encode(body)));
@@ -183,7 +195,7 @@ export function ringkasUjian_(u) {
   return {
     id: u.id, nama: u.nama, bankId: u.bankId, bankJudul: u.bankJudul, mapel: u.mapel, tingkat: u.tingkat,
     guruId: u.guruId, guruNama: u.guruNama, kelas: u.kelas, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi,
-    acakSoal: u.acakSoal, acakOpsi: u.acakOpsi, tampilNilai: u.tampilNilai, pakaiToken: u.pakaiToken,
+    acakSoal: u.acakSoal, acakOpsi: u.acakOpsi, tampilNilai: u.tampilNilai, pakaiToken: u.pakaiToken, wajibApp: !!u.wajibApp,
     token: u.token, maxPelanggaran: u.maxPelanggaran, aktif: u.aktif, keterangan: u.keterangan,
     jumlahSoal: u.jumlahSoal, status: statusJadwal_(u, now()), diubah: u.diubah
   };

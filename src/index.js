@@ -125,7 +125,7 @@ const AKSI = {
     return list.map(u => {
       const h = hasil[u.id];
       const item = {
-        id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi,
+        id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi, wajibApp: !!u.wajibApp,
         jumlahSoal: u.jumlahSoal, pakaiToken: u.pakaiToken, keterangan: u.keterangan,
         jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? 'selesai' : 'belum'
       };

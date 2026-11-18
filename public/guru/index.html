@@ -257,6 +257,7 @@ table.tbl{width:100%;border-collapse:collapse}
 .koreksi-item .jwb{white-space:pre-wrap;font-family:var(--font-soal);font-size:15px;background:#FAFBFC;border-radius:7px;padding:10px 12px;margin:8px 0}
 .token-box{display:flex;align-items:center;gap:14px;border:1.6px dashed var(--tinta);border-radius:10px;padding:10px 16px;background:var(--tinta-muda)}
 .token-box b{font-size:28px;letter-spacing:.18em;color:var(--tinta);font-variant-numeric:tabular-nums}
+.token-keluar.pisah{margin-top:8px;padding-top:8px;border-top:1px dashed var(--tinta)}.token-keluar b{font-size:20px;color:var(--grafit,#252A30)}
 
 .chips-input{display:flex;flex-wrap:wrap;gap:6px;border:1px solid var(--garis);border-radius:7px;padding:6px;min-height:40px;background:#fff}
 .chips-input span{display:inline-flex;align-items:center;gap:4px;background:#EEF0F2;border-radius:5px;padding:2px 4px 2px 8px;font-size:13px}
@@ -477,7 +478,7 @@ table.tbl{width:100%;border-collapse:collapse}
         <span class="ed-status" :class="{kotor: kotor}">{{ kotor ? 'Ada perubahan belum disimpan' : (tersimpan ? 'Tersimpan ' + fmtJam(tersimpan) : 'Tersimpan') }}</span>
         <button class="btn btn-sm" @click="impor.buka=true">Impor cepat</button>
         <button class="btn btn-sm" @click="pratinjau=!pratinjau" :disabled="!bank.soal.length">{{ pratinjau ? 'Kembali menyunting' : 'Pratinjau siswa' }}</button>
-        <button class="btn btn-primary btn-sm" @click="simpan" :disabled="menyimpan">{{ menyimpan ? 'Menyimpan…' : 'Simpan' }}</button>
+        <button class="btn btn-primary btn-sm" @click="simpan" :disabled="menyimpan" v-if="kotor || menyimpan">{{ menyimpan ? 'Menyimpan…' : 'Simpan' }}</button>
       </div>
       <div class="warn-bar" v-if="dipakai.length">Bank ini dipakai di jadwal: <b>{{ dipakai.join(', ') }}</b>. Perubahan langsung berlaku untuk ujian tersebut.</div>
       <div class="ed">
@@ -817,6 +818,7 @@ table.tbl{width:100%;border-collapse:collapse}
             <div>
               <label class="check"><input type="checkbox" v-model="f.pakaiToken"><span>Wajib memasukkan token ujian<br><small class="muted">Token dibacakan pengawas di ruang ujian</small></span></label>
               <label class="check"><input type="checkbox" v-model="f.aktif"><span>Jadwal aktif (tampil ke siswa)</span></label>
+              <label class="check"><input type="checkbox" v-model="f.wajibApp"><span>Wajib memakai aplikasi CBT Ujian (Android/Windows)<br><small class="muted">Siswa tidak bisa mulai dari browser biasa. Aplikasi terkunci sampai jawaban terkirim; keluar lebih awal memakai token keluar di Monitoring.</small></span></label>
               <label class="field" style="max-width:260px"><span>Batas keluar halaman ujian</span><input type="number" min="0" max="50" v-model.number="f.maxPelanggaran"><small>0 = hanya dicatat. Jika batas tercapai, jawaban dikirim otomatis.</small></label>
             </div>
           </div>
@@ -852,7 +854,13 @@ table.tbl{width:100%;border-collapse:collapse}
       <template v-else>
         <div class="page-head">
           <div><a href="#/monitor" class="small">‹ Semua ujian</a><h1 style="margin-top:4px">{{ d.ujian.nama }}</h1><p>{{ d.ujian.mapel }} · {{ fmtWaktu(d.ujian.mulai) }} – {{ fmtJam(d.ujian.selesai) }} · {{ d.ujian.durasi }} menit<template v-if="!d.semuaKelas"> · Kelas yang Anda awasi: <b>{{ d.ujian.kelas.join(', ') }}</b></template></p></div>
-          <div class="token-box" v-if="d.ujian.pakaiToken"><div><div class="small muted">Token ujian</div><b>{{ d.ujian.token }}</b></div><button class="btn btn-sm" @click="gantiToken">Ganti token</button></div>
+          <div class="token-box" v-if="d.ujian.pakaiToken || d.ujian.tokenKeluar">
+            <div>
+              <template v-if="d.ujian.pakaiToken"><div class="small muted">Token ujian</div><b>{{ d.ujian.token }}</b></template>
+              <div class="token-keluar" v-if="d.ujian.tokenKeluar" :class="{pisah: d.ujian.pakaiToken}"><div class="small muted">Token keluar aplikasi</div><b>{{ d.ujian.tokenKeluar }}</b></div>
+            </div>
+            <button class="btn btn-sm" @click="gantiToken" v-if="d.ujian.pakaiToken">Ganti token</button>
+          </div>
         </div>
         <div class="panel panel-pad" style="margin-bottom:16px">
           <div class="stat-status">
@@ -1052,7 +1060,7 @@ table.tbl{width:100%;border-collapse:collapse}
       <div class="row">
         <button class="btn" @click="kartu" :disabled="!list || !list.length">Cetak kartu login</button>
         <button class="btn" @click="unduh" :disabled="!list || !list.length">Unduh Excel</button>
-        <button class="btn" @click="imp={teks:'',rows:[],mode:'tambah'}">Impor</button>
+        <button class="btn" @click="imp={teks:'',rows:[],mode:'tambah',rusak:0}">Impor</button>
         <button class="btn btn-primary" @click="f={nis:'',nama:'',kelas:fKelas||'',password:'',nisLama:''}">Tambah siswa</button>
       </div>
     </div>
@@ -1095,10 +1103,11 @@ table.tbl{width:100%;border-collapse:collapse}
 
     <div class="modal-bg" v-if="imp" @click.self="imp=null">
       <div class="modal lebar">
-        <div class="modal-head"><div><h2>Impor siswa</h2><p class="muted small">Unggah file Excel/CSV, atau salin-tempel dari Excel. Kolom: <b>NIS, Nama, Kelas</b>, dan opsional <b>Kata sandi</b>. Baris judul boleh ada.</p></div><button class="x" @click="imp=null">×</button></div>
+        <div class="modal-head"><div><h2>Impor siswa</h2><p class="muted small">Unggah file Excel/CSV, atau salin-tempel dari Excel. Kolom: <b>NIS/NISN, Nama, Kelas</b>, dan opsional <b>Kata sandi</b>. Baris judul boleh ada. NIS/NISN yang diawali angka 0 tetap utuh. <a href="#" @click.prevent="unduhFormat">Unduh format Excel</a></p></div><button class="x" @click="imp=null">×</button></div>
         <div class="modal-body">
           <div class="row" style="margin-bottom:10px"><input type="file" accept=".xlsx,.xls,.csv" @change="bacaFile"></div>
           <textarea class="input" rows="7" v-model="imp.teks" @input="parseTeks" placeholder="atau tempel di sini (salin dari Excel)…" style="font-family:ui-monospace,Consolas,monospace;font-size:13px"></textarea>
+          <p class="small" v-if="imp.rusak" style="margin:12px 0 0;color:var(--merah,#c0392b)"><b>{{ imp.rusak }} baris dilewati:</b> NIS/NISN atau kata sandinya tersimpan di Excel sebagai angka panjang sehingga digit terakhir sudah berubah (mis. 1.98012E+17). Ubah format kolom menjadi <b>Teks</b> lalu ketik ulang, atau pakai <i>Unduh format Excel</i>.</p>
           <template v-if="imp.rows.length">
             <p class="small" style="margin:12px 0 6px">Terbaca <b>{{ imp.rows.length }}</b> siswa. Contoh 5 baris pertama:</p>
             <table class="tbl" style="border:1px solid var(--garis-2)"><thead><tr><th>NIS</th><th>Nama</th><th>Kelas</th><th>Kata sandi</th></tr></thead>
@@ -1120,7 +1129,7 @@ table.tbl{width:100%;border-collapse:collapse}
     <div class="page-head"><div><h1>Data guru</h1><p>Akun guru untuk menyusun bank soal. Admin bisa mengelola semua data dan jadwal.</p></div>
       <div class="row">
         <button class="btn" @click="unduh" :disabled="!list || !list.length">Unduh Excel</button>
-        <button class="btn" @click="imp={teks:'',rows:[]}">Impor</button>
+        <button class="btn" @click="imp={teks:'',rows:[],rusak:0}">Impor</button>
         <button class="btn btn-primary" @click="f={username:'',nama:'',role:'guru',aktif:true,password:'',mapel:[]}">Tambah guru</button>
       </div></div>
     <div class="panel">
@@ -1154,10 +1163,11 @@ table.tbl{width:100%;border-collapse:collapse}
 
     <div class="modal-bg" v-if="imp" @click.self="imp=null">
       <div class="modal lebar">
-        <div class="modal-head"><div><h2>Impor guru</h2><p class="muted small">Unggah file Excel/CSV, atau salin-tempel dari Excel. Kolom: <b>Nama pengguna, Nama</b>, dan opsional <b>Mata pelajaran, Password, Peran, Status</b> — sama dengan file <i>Unduh Excel</i>. Baris judul boleh ada.</p></div><button class="x" @click="imp=null">×</button></div>
+        <div class="modal-head"><div><h2>Impor guru</h2><p class="muted small">Unggah file Excel/CSV, atau salin-tempel dari Excel. Kolom: <b>Nama pengguna, Nama</b>, dan opsional <b>Mata pelajaran, Password, Peran, Status</b> — sama dengan file <i>Unduh Excel</i>. Baris judul boleh ada. Nama pengguna boleh berupa NIP (angka, termasuk diawali 0). <a href="#" @click.prevent="unduhFormat">Unduh format Excel</a></p></div><button class="x" @click="imp=null">×</button></div>
         <div class="modal-body">
           <div class="row" style="margin-bottom:10px"><input type="file" accept=".xlsx,.xls,.csv" @change="bacaFile"></div>
           <textarea class="input" rows="7" v-model="imp.teks" @input="parseTeks" placeholder="atau tempel di sini (salin dari Excel)…" style="font-family:ui-monospace,Consolas,monospace;font-size:13px"></textarea>
+          <p class="small" v-if="imp.rusak" style="margin:12px 0 0;color:var(--merah,#c0392b)"><b>{{ imp.rusak }} baris dilewati:</b> NIP/nama pengguna atau password tersimpan di Excel sebagai angka panjang sehingga digit terakhir sudah berubah (mis. 1.98012E+17). Ubah format kolom menjadi <b>Teks</b> lalu ketik ulang, atau pakai <i>Unduh format Excel</i>.</p>
           <template v-if="imp.rows.length">
             <p class="small" style="margin:12px 0 6px">Terbaca <b>{{ imp.rows.length }}</b> guru (<b>{{ hitungImpor.baru }}</b> baru, <b>{{ hitungImpor.ubah }}</b> sudah ada). Contoh 5 baris pertama:</p>
             <div class="tbl-wrap"><table class="tbl" style="border:1px solid var(--garis-2)"><thead><tr><th>Nama pengguna</th><th>Nama</th><th>Mata pelajaran</th><th>Password</th><th>Peran</th><th>Status</th></tr></thead>
@@ -1178,7 +1188,8 @@ table.tbl{width:100%;border-collapse:collapse}
       <div class="row">
         <button class="btn" @click="unduhExcel">Unduh Excel</button>
         <button class="btn" @click="imp={data:null,mode:'gabung'}">Impor</button>
-        <button class="btn btn-primary" @click="simpan" :disabled="sibuk">{{ sibuk ? 'Menyimpan…' : 'Simpan pengaturan' }}</button>
+        <button class="btn btn-primary" @click="simpan" :disabled="sibuk" v-if="berubah || sibuk">{{ sibuk ? 'Menyimpan…' : 'Simpan pengaturan' }}</button>
+        <span class="small muted" v-else-if="asli">Tersimpan</span>
       </div></div>
     <div class="panel panel-pad">
       <h3 style="margin-bottom:12px">Identitas</h3>
@@ -1254,7 +1265,7 @@ table.tbl{width:100%;border-collapse:collapse}
       <label class="field"><span>Kata sandi baru</span><input type="password" v-model="baru" required minlength="6" autocomplete="new-password"></label>
       <label class="field"><span>Ulangi kata sandi baru</span><input type="password" v-model="ulang" required autocomplete="new-password"></label>
       <p class="err" v-if="ulang && baru!==ulang">Kata sandi baru tidak sama.</p>
-      <button class="btn btn-primary" :disabled="sibuk || baru!==ulang">Simpan kata sandi</button>
+      <button class="btn btn-primary" :disabled="sibuk || baru!==ulang" v-if="lama || baru || ulang">Simpan kata sandi</button>
     </form>
   </div>
 </script>
@@ -1554,6 +1565,52 @@ function muatXLSX() {
     s.onload = () => ok(window.XLSX); s.onerror = () => { xlsxP = null; no(new Error('Gagal memuat pustaka Excel. Periksa koneksi.')); };
     document.head.appendChild(s);
   }));
+}
+/* NIS/NISN, NIP (nama pengguna), dan password di Excel:
+   - saat diunduh, kolomnya berformat Teks (juga baris kosong di bawahnya) → angka 0 di depan & NIP 18 digit tetap utuh;
+   - saat diimpor, sel dibaca apa adanya (format 0000000000 → "0081234567"); angka > 15 digit yang sudah rusak
+     di Excel (mis. 1.98012E+17) ditandai agar tidak tersimpan salah. */
+const RUSAK = '\u0000';
+function lembarTeks(X, header, rows, kolomTeks, kosong = 300) {
+  const ws = X.utils.json_to_sheet(rows, { header });
+  const n = rows.length + kosong;
+  kolomTeks.forEach(nama => {
+    const c = header.indexOf(nama); if (c < 0) return;
+    for (let r = 1; r <= n; r++) {
+      const ref = X.utils.encode_cell({ r, c }), sel = ws[ref];
+      if (sel) { sel.t = 's'; sel.v = String(sel.v ?? ''); sel.z = '@'; delete sel.w; } else ws[ref] = { t: 's', v: '', z: '@' };
+    }
+  });
+  ws['!ref'] = X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: n, c: header.length - 1 } });
+  ws['!cols'] = header.map(h => ({ wch: Math.max(14, h.length + 2) }));
+  return ws;
+}
+function teksSel(c) {
+  if (!c || c.v === undefined || c.v === null) return '';
+  if (c.t === 'n') {
+    const w = String(c.w ?? '').trim();
+    if (/^\d+$/.test(w)) return w;                                     // format 0000000000 → angka 0 di depan tetap
+    if (Number.isInteger(c.v)) { const t = BigInt(c.v).toString(); return t.length > 15 ? RUSAK + t : t; }
+    return w || String(c.v);
+  }
+  return String(c.w ?? c.v).trim();
+}
+function bacaLembar(X, ws) {
+  if (!ws || !ws['!ref']) return [];
+  const rg = X.utils.decode_range(ws['!ref']), out = [];
+  for (let r = rg.s.r; r <= rg.e.r; r++) {
+    const baris = [];
+    for (let c = rg.s.c; c <= rg.e.c; c++) baris.push(teksSel(ws[X.utils.encode_cell({ r, c })]));
+    if (baris.some(x => x !== '')) out.push(baris);
+  }
+  return out;
+}
+/** Nilai pengenal dari Excel: null = rusak (digit hilang karena tersimpan sebagai angka). */
+function pengenal(v, panjangNisn) {
+  let t = String(v ?? '').trim();
+  if (t.startsWith(RUSAK) || /^\d+(\.\d+)?E\+?\d+$/i.test(t)) return null;
+  if (panjangNisn && /^\d{1,9}$/.test(t)) t = t.padStart(10, '0');   // NISN selalu 10 digit
+  return t;
 }
 function unduhBlob(nama, isi, mime = 'application/octet-stream') {
   const b = isi instanceof Blob ? isi : new Blob([isi], { type: mime });
@@ -1986,7 +2043,7 @@ app.component('v-jadwal', {
         if (salin) { this.f.id = ''; this.f.nama = u.nama + ' (salinan)'; this.f.pengawas = []; }
       } else {
         const m = new Date(sekarang() + 86400000); m.setHours(7, 30, 0, 0);
-        this.f = { id: '', nama: '', bankId: '', tingkat: '', kelas: [], mulaiStr: keInput(m.getTime()), selesaiStr: keInput(m.getTime() + 2 * 3600000), durasi: 90, acakSoal: true, acakOpsi: true, tampilNilai: false, pakaiToken: true, maxPelanggaran: 3, aktif: true, keterangan: '', pengawas: [] };
+        this.f = { id: '', nama: '', bankId: '', tingkat: '', kelas: [], mulaiStr: keInput(m.getTime()), selesaiStr: keInput(m.getTime() + 2 * 3600000), durasi: 90, acakSoal: true, acakOpsi: true, tampilNilai: false, pakaiToken: true, wajibApp: false, maxPelanggaran: 3, aktif: true, keterangan: '', pengawas: [] };
       }
     },
     // nama ujian mengikuti judul bank soal (dari guru); admin tetap bisa mengubahnya
@@ -2205,7 +2262,7 @@ app.component('v-hasil', {
         try {
           const X = await muatXLSX(), wb = X.utils.book_new();
           const rows = this.tampil.map((p, i) => ({ No: i + 1, NIS: p.nis, Nama: p.nama, Kelas: p.kelas, Status: ({ belum: 'Belum mulai', mengerjakan: 'Mengerjakan', pending: 'Pending', selesai: 'Selesai', direset: 'Direset' })[p.status] || p.status, Mulai: p.mulai ? new Date(p.mulai).toLocaleString('id-ID') : '', Selesai: p.selesai ? new Date(p.selesai).toLocaleString('id-ID') : '', 'Keluar halaman': p.pelanggaran || 0, Catatan: p.catatan || '' }));
-          X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), 'Peserta');
+          X.utils.book_append_sheet(wb, lembarTeks(X, Object.keys(rows[0] || { No: 0, NIS: '' }), rows, ['NIS'], 0), 'Peserta');
           X.writeFile(wb, 'Peserta_' + namaFile(this.d.ujian.nama) + '.xlsx');
         } catch (e) { toast(e.message, 'err'); }
         return;
@@ -2216,8 +2273,8 @@ app.component('v-hasil', {
         const perSoal = this.tampil.filter(p => p.hasil).map(p => { const o = { NIS: p.nis, Nama: p.nama, Kelas: p.kelas }; soal.forEach((s, i) => { const v = p.hasil.perSoal[s.id]; o['S' + (i + 1)] = v === null || v === undefined ? '' : v; }); o.Nilai = p.hasil.nilai; return o; });
         const an = this.analisis.map((a, i) => ({ No: i + 1, Jenis: namaTipe(a.tipe), Soal: polos(a.teks).slice(0, 200), 'Skor penuh (%)': a.persenBenar, P: a.p, Kesukaran: a.pKat, D: a.d, 'Daya pembeda': a.dKat, Sebaran: a.distr ? a.distr.map(x => x.h + ':' + x.n + (x.kunci ? '(kunci)' : '')).join(' ') : '' }));
         const wb = X.utils.book_new();
-        X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), 'Nilai');
-        X.utils.book_append_sheet(wb, X.utils.json_to_sheet(perSoal), 'Skor per soal');
+        X.utils.book_append_sheet(wb, lembarTeks(X, Object.keys(rows[0] || { No: 0, NIS: '' }), rows, ['NIS'], 0), 'Nilai');
+        X.utils.book_append_sheet(wb, lembarTeks(X, Object.keys(perSoal[0] || { NIS: '' }), perSoal, ['NIS'], 0), 'Skor per soal');
         X.utils.book_append_sheet(wb, X.utils.json_to_sheet(an), 'Analisis soal');
         X.writeFile(wb, 'Nilai_' + namaFile(this.d.ujian.nama) + '.xlsx');
       } catch (e) { toast(e.message, 'err'); }
@@ -2258,13 +2315,24 @@ app.component('v-siswa', {
       const h = baris[0].map(norm);
       let iN = h.findIndex(x => ['nis', 'nisn', 'noinduk', 'nomorinduk'].includes(x)), iNm = h.findIndex(x => x.startsWith('nama')), iK = h.findIndex(x => ['kelas', 'rombel', 'rombonganbelajar'].includes(x)), iP = h.findIndex(x => ['password', 'katasandi', 'sandi', 'pass'].includes(x));
       let data = baris.slice(1);
-      if (iN < 0 || iNm < 0 || iK < 0) { iN = 0; iNm = 1; iK = 2; iP = 3; data = baris; if (norm(baris[0][0]) === 'nis' || norm(baris[0][0]) === 'no') data = baris.slice(1); }
-      return data.map(r => ({ nis: String(r[iN] ?? '').trim(), nama: String(r[iNm] ?? '').trim(), kelas: String(r[iK] ?? '').trim(), password: iP >= 0 ? String(r[iP] ?? '').trim() : '' })).filter(r => r.nis && r.nama && r.kelas);
+      if (iN < 0 || iNm < 0 || iK < 0) { iN = 0; iNm = 1; iK = 2; iP = 3; data = baris; if (['nis', 'nisn', 'no'].includes(norm(baris[0][0]))) data = baris.slice(1); }
+      const nisn = h[iN] === 'nisn';
+      let rusak = 0;
+      const out = [];
+      for (const r of data) {
+        const nama = String(r[iNm] ?? '').trim(), kelas = String(r[iK] ?? '').trim();
+        if (!String(r[iN] ?? '').trim() || !nama || !kelas) continue;
+        const nis = pengenal(r[iN], nisn), pw = iP >= 0 ? pengenal(r[iP]) : '';
+        if (nis === null || pw === null) { rusak++; continue; }
+        out.push({ nis, nama, kelas, password: pw });
+      }
+      if (this.imp) this.imp.rusak = rusak;
+      return out;
     },
     parseTeks() { const sep = this.imp.teks.includes('\t') ? '\t' : (this.imp.teks.includes(';') ? ';' : ','); this.imp.rows = this.petakan(this.imp.teks.replace(/\r/g, '').split('\n').filter(l => l.trim()).map(l => l.split(sep))); },
     async bacaFile(e) {
       const f = e.target.files[0]; if (!f) return;
-      try { const X = await muatXLSX(); const wb = X.read(await f.arrayBuffer(), { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; this.imp.rows = this.petakan(X.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })); if (!this.imp.rows.length) toast('Tidak ada data yang terbaca. Pastikan kolom NIS, Nama, Kelas.', 'err'); }
+      try { const X = await muatXLSX(); const wb = X.read(await f.arrayBuffer(), { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; this.imp.rows = this.petakan(bacaLembar(X, ws)); if (!this.imp.rows.length && !this.imp.rusak) toast('Tidak ada data yang terbaca. Pastikan kolom NIS, Nama, Kelas.', 'err'); }
       catch (err) { toast(err.message, 'err'); }
     },
     async impor() {
@@ -2279,7 +2347,14 @@ app.component('v-siswa', {
     },
     async unduh() {
       // kolom D = Password: isian admin; kosong saat ditambah → sama dengan NIS
-      try { const [X, sandi] = await Promise.all([muatXLSX(), api('sandiSiswa')]); const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(this.tampil.map(s => ({ NIS: s.nis, Nama: s.nama, Kelas: s.kelas, Password: sandi[s.nis] ?? s.nis }))), 'Siswa'); X.writeFile(wb, 'Data_siswa' + (this.fKelas ? '_' + namaFile(this.fKelas) : '') + '.xlsx'); }
+      try {
+        const [X, sandi] = await Promise.all([muatXLSX(), api('sandiSiswa')]), wb = X.utils.book_new();
+        X.utils.book_append_sheet(wb, lembarTeks(X, ['NIS', 'Nama', 'Kelas', 'Password'], this.tampil.map(s => ({ NIS: s.nis, Nama: s.nama, Kelas: s.kelas, Password: sandi[s.nis] ?? s.nis })), ['NIS', 'Password']), 'Siswa');
+        X.writeFile(wb, 'Data_siswa' + (this.fKelas ? '_' + namaFile(this.fKelas) : '') + '.xlsx');
+      } catch (e) { toast(e.message, 'err'); }
+    },
+    async unduhFormat() {
+      try { const X = await muatXLSX(), wb = X.utils.book_new(); X.utils.book_append_sheet(wb, lembarTeks(X, ['NIS', 'Nama', 'Kelas', 'Password'], [], ['NIS', 'Password'], 1500), 'Siswa'); X.writeFile(wb, 'Format_impor_siswa.xlsx'); }
       catch (e) { toast(e.message, 'err'); }
     },
     async kartu() {
@@ -2289,7 +2364,7 @@ app.component('v-siswa', {
       let sandi = {};
       try { sandi = await api('sandiSiswa'); } catch (e) { w.close(); return toast(e.message, 'err'); }
       w.document.open();
-      const sek = esc(S.config.namaSekolah), url = esc(location.href.replace(/\/guru\/?.*$/, '/siswa/'));
+      const sek = esc(S.config.namaSekolah), url = esc(location.href.replace(/\/guru\/?.*$/, '/ujian-cbt/'));
       w.document.write(`<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><title>Kartu login CBT</title><style>
         body{font-family:Arial,sans-serif;margin:12mm;color:#222}.g{display:grid;grid-template-columns:1fr 1fr;gap:6mm}
         .k{border:1.4px solid #D23F68;border-radius:3mm;padding:4mm 5mm;break-inside:avoid;font-size:11pt}
@@ -2302,6 +2377,7 @@ app.component('v-siswa', {
   }
 });
 
+const KOLOM_GURU = ['Nama pengguna', 'Nama', 'Mata pelajaran', 'Password', 'Peran', 'Status'];
 app.component('v-guru', {
   template: '#t-guru', data: () => ({ list: null, f: null, imp: null, sibuk: false }),
   computed: {
@@ -2314,21 +2390,30 @@ app.component('v-guru', {
       if (!baris.length) return [];
       const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
       const h = baris[0].map(norm);
-      let iU = h.findIndex(x => ['namapengguna', 'username', 'user', 'pengguna', 'akun', 'login'].includes(x));
+      let iU = h.findIndex(x => ['namapengguna', 'username', 'user', 'pengguna', 'akun', 'login', 'nip', 'nippengguna'].includes(x));
       let iN = h.findIndex((x, i) => i !== iU && ['nama', 'namalengkap', 'namaguru'].includes(x));
       let iM = h.findIndex(x => ['matapelajaran', 'mapel', 'pelajaran', 'matapelajaranyangdiampu'].includes(x));
       let iP = h.findIndex(x => ['password', 'katasandi', 'sandi', 'pass'].includes(x));
       let iR = h.findIndex(x => ['peran', 'role', 'hakakses', 'akses'].includes(x));
       let iS = h.findIndex(x => ['status', 'aktif', 'statusakun'].includes(x));
       let data = baris.slice(1);
-      if (iU < 0 || iN < 0) { [iU, iN, iM, iP, iR, iS] = [0, 1, 2, 3, 4, 5]; data = /^(namapengguna|username|no)$/.test(norm(baris[0][0])) ? baris.slice(1) : baris; }
+      if (iU < 0 || iN < 0) { [iU, iN, iM, iP, iR, iS] = [0, 1, 2, 3, 4, 5]; data = /^(namapengguna|username|nip|no)$/.test(norm(baris[0][0])) ? baris.slice(1) : baris; }
       const sel = (r, i) => i >= 0 ? String(r[i] ?? '').trim() : '';
-      return data.map(r => ({ username: sel(r, iU).toLowerCase(), nama: sel(r, iN), mapel: sel(r, iM), password: sel(r, iP), peran: sel(r, iR), status: sel(r, iS) })).filter(r => r.username && r.nama);
+      let rusak = 0;
+      const out = [];
+      for (const r of data) {
+        if (!sel(r, iU) || !sel(r, iN)) continue;
+        const u = pengenal(r[iU]), pw = iP >= 0 ? pengenal(r[iP]) : '';
+        if (u === null || pw === null) { rusak++; continue; }    // NIP 18 digit yang tersimpan sebagai angka
+        out.push({ username: u.toLowerCase(), nama: sel(r, iN), mapel: sel(r, iM), password: pw, peran: sel(r, iR), status: sel(r, iS) });
+      }
+      if (this.imp) this.imp.rusak = rusak;
+      return out;
     },
     parseTeks() { const sep = this.imp.teks.includes('\t') ? '\t' : (this.imp.teks.includes(';') ? ';' : ','); this.imp.rows = this.petakan(this.imp.teks.replace(/\r/g, '').split('\n').filter(l => l.trim()).map(l => l.split(sep))); },
     async bacaFile(e) {
       const f = e.target.files[0]; if (!f) return;
-      try { const X = await muatXLSX(); const wb = X.read(await f.arrayBuffer(), { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; this.imp.rows = this.petakan(X.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })); if (!this.imp.rows.length) toast('Tidak ada data yang terbaca. Pastikan ada kolom Nama pengguna dan Nama.', 'err'); }
+      try { const X = await muatXLSX(); const wb = X.read(await f.arrayBuffer(), { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; this.imp.rows = this.petakan(bacaLembar(X, ws)); if (!this.imp.rows.length && !this.imp.rusak) toast('Tidak ada data yang terbaca. Pastikan ada kolom Nama pengguna dan Nama.', 'err'); }
       catch (err) { toast(err.message, 'err'); }
     },
     async impor() {
@@ -2344,9 +2429,13 @@ app.component('v-guru', {
       try {
         const [X, sandi] = await Promise.all([muatXLSX(), api('sandiGuru')]), wb = X.utils.book_new();
         const rows = this.list.map(g => ({ 'Nama pengguna': g.username, 'Nama': g.nama, 'Mata pelajaran': (g.mapel || []).join(', '), 'Password': sandi[g.id] || '', 'Peran': g.role === 'admin' ? 'Admin' : 'Guru', 'Status': g.aktif ? 'Aktif' : 'Nonaktif' }));
-        X.utils.book_append_sheet(wb, X.utils.json_to_sheet(rows), 'Guru');
+        X.utils.book_append_sheet(wb, lembarTeks(X, KOLOM_GURU, rows, ['Nama pengguna', 'Password']), 'Guru');
         X.writeFile(wb, 'Data_guru.xlsx');
       } catch (e) { toast(e.message, 'err'); }
+    },
+    async unduhFormat() {
+      try { const X = await muatXLSX(), wb = X.utils.book_new(); X.utils.book_append_sheet(wb, lembarTeks(X, KOLOM_GURU, [], ['Nama pengguna', 'Password'], 300), 'Guru'); X.writeFile(wb, 'Format_impor_guru.xlsx'); }
+      catch (e) { toast(e.message, 'err'); }
     },
     async simpan() {
       this.sibuk = true;
@@ -2362,8 +2451,10 @@ app.component('v-guru', {
 
 app.component('v-pengaturan', {
   template: '#t-pengaturan',
-  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), sibuk: false, sibukSync: false, versi: '', st: null, imp: null }),
+  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), asli: '', sibuk: false, sibukSync: false, versi: '', st: null, imp: null }),
   computed: {
+    // tombol Simpan hanya tampil bila ada perubahan dari yang tersimpan
+    berubah() { return !!this.asli && JSON.stringify(this.c) !== this.asli; },
     hitungBaru() {
       const d = this.imp && this.imp.data; if (!d) return {};
       const k = new Set((this.c.kelas || []).map(x => x.nama.toLowerCase())), m = new Set((this.c.mapel || []).map(x => x.toLowerCase()));
@@ -2373,13 +2464,14 @@ app.component('v-pengaturan', {
   async mounted() {
     try { this.c = await api('getConfig'); } catch (e) {}
     this.c.tingkat = this.c.tingkat || []; this.c.kelas = this.c.kelas || []; this.c.mapel = this.c.mapel || [];
+    this.asli = JSON.stringify(this.c);
     api('ping').then(r => this.versi = r.versi).catch(() => {});
     this.muatStatus();
   },
   methods: {
     async simpan() {
       this.sibuk = true;
-      try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); toast('Pengaturan tersimpan'); return true; }
+      try { S.config = await api('saveConfig', this.c); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); this.c.tingkat = this.c.tingkat || []; this.c.kelas = this.c.kelas || []; this.c.mapel = this.c.mapel || []; this.asli = JSON.stringify(this.c); toast('Pengaturan tersimpan'); return true; }
       catch (e) { toast(e.message, 'err'); return false; } finally { this.sibuk = false; }
     },
     async unduhExcel() {
@@ -2458,7 +2550,7 @@ app.component('v-pengaturan', {
       try {
         const n = await api('imporCadangan', {}, { retry: 0 });
         toast(`Diimpor: ${n.guru} guru, ${n.siswa} siswa, ${n.bank} bank soal, ${n.ujian} jadwal, ${n.hasil} hasil`, 'ok', 8000);
-        S.config = await api('getConfig'); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config));
+        S.config = await api('getConfig'); localStorage.setItem('cbt_g_config', JSON.stringify(S.config)); this.c = JSON.parse(JSON.stringify(S.config)); this.asli = JSON.stringify(this.c);
       } catch (e) { toast(e.message, 'err', 8000); } finally { this.sibukSync = false; }
     }
   }

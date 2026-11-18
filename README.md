@@ -6,7 +6,7 @@ memasang ulang aplikasi dalam 1–2 menit.
 | Folder / file | Isi |
 |---|---|
 | `public/guru/` | Aplikasi guru & admin |
-| `public/siswa/` | Aplikasi siswa |
+| `public/ujian-cbt/` | Aplikasi siswa (alamat `…/ujian-cbt/`; `public/siswa/` hanya pengalih untuk alamat lama) |
 | `src/` | Backend: Worker + Durable Object "Engine" |
 | `wrangler.jsonc` | Pengaturan Cloudflare (nama repo GitHub Anda sudah terisi) |
 | `test/` | Uji otomatis (untuk pengembang) |

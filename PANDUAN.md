@@ -6,7 +6,7 @@ semuanya dalam **paket gratis**. Aplikasi guru dan siswa tampil dan bekerja sama
 | Bagian | Lokasi | Keterangan |
 |---|---|---|
 | Aplikasi guru & admin | `public/guru/index.html` | Bank soal, jadwal, monitoring **langsung**, hasil & koreksi |
-| Aplikasi siswa | `public/siswa/index.html` | Login, kerjakan ujian, jawaban tersimpan otomatis |
+| Aplikasi siswa | `public/ujian-cbt/index.html` | Login, kerjakan ujian, jawaban tersimpan otomatis |
 | Backend | `src/` | Worker (pintu masuk) + Durable Object "Engine" (mesin ujian) |
 | Pengaturan Cloudflare | `wrangler.jsonc` | Nama aplikasi, repo GitHub gambar/cadangan |
 
@@ -116,7 +116,7 @@ npx wrangler deploy
 
 Aplikasi langsung bisa dibuka:
 - Guru & admin: `https://cbt-sekolah.<subdomain>.workers.dev/guru/`
-- Siswa: `https://cbt-sekolah.<subdomain>.workers.dev/siswa/`
+- Siswa: `https://cbt-sekolah.<subdomain>.workers.dev/ujian-cbt/` (alamat lama `/siswa/` dan alamat utama `/` dialihkan ke sini)
 
 ## Langkah 3 — GitHub untuk gambar soal (agar guru bisa unggah gambar)
 
@@ -155,7 +155,7 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 
 ---
 
-## Hak akses (versi 2.6.0-CBT)
+## Hak akses (versi 2.7.0-CBT)
 
 | | Admin | Guru pengawas | Guru pemilik soal | Siswa |
 |---|---|---|---|---|
@@ -178,6 +178,25 @@ Status* (sama dengan hasil *Unduh Excel*). Guru baru tanpa password → password
 
 **Impor pengaturan:** Pengaturan → *Unduh Excel* (lembar Identitas, Tingkat, Kelas, Mata pelajaran) → ubah di Excel →
 *Impor* → pilih *Tambahkan* atau *Ganti* → *Impor & simpan*.
+
+## Aplikasi ujian Android (.apk) & Windows (.exe)
+
+Folder `ExamBrowser` berisi aplikasi seperti *exambrowser* untuk halaman `/ujian-cbt/`. Cara membangun (lewat
+GitHub Actions, gratis) dan memasangnya ada di `ExamBrowser/README.md`. Ringkasnya:
+
+- Android: terkunci sejak siswa menekan **Mulai mengerjakan** (sematkan layar + lapisan mengambang bila siswa keluar).
+- Windows: layar penuh & tombol pintas Windows diblokir sejak dibuka; terkunci penuh sejak **Mulai mengerjakan**.
+- Keluar sebelum jawaban terkirim hanya dengan **token keluar** (Monitoring → di bawah token ujian).
+- Jadwal → **Wajib memakai aplikasi CBT Ujian** agar ujian tidak bisa dikerjakan dari browser biasa.
+
+## Excel: NISN, NIP, dan password berawalan 0
+
+File *Unduh Excel* dan *Unduh format Excel* (di jendela Impor) memakai format **Teks** untuk kolom NIS/NISN,
+Nama pengguna (NIP), dan Password — termasuk baris kosong di bawahnya — sehingga angka 0 di depan dan NIP 18 digit
+tidak berubah saat diketik. Saat impor:
+- NISN di kolom berjudul **NISN** yang tersimpan sebagai angka (0 di depan hilang) dilengkapi kembali menjadi 10 digit;
+- angka lebih dari 15 digit yang sudah rusak di Excel (mis. `1.98012E+17`) dilewati dan diberi tahu, karena digit
+  terakhirnya sudah berubah. Ubah kolomnya menjadi Teks lalu ketik ulang.
 
 ## serverB (cadangan) dan serverC (server utama)
 
@@ -232,7 +251,7 @@ Ubah file, lalu jalankan `npx wrangler deploy` (atau klik dua kali `PASANG-WINDO
 ## Hosting di GitHub Pages (opsional)
 
 Aplikasi sudah ikut di Cloudflare, jadi ini tidak wajib. Jika tetap ingin memakai GitHub Pages, ubah baris ini di
-`public/guru/index.html` dan `public/siswa/index.html`:
+`public/guru/index.html` dan `public/ujian-cbt/index.html`:
 ```js
 const API_URL = window.CBT_API_URL || 'https://cbt-sekolah.<subdomain>.workers.dev/api';
 ```

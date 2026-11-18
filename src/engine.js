@@ -532,6 +532,7 @@ export class Engine extends DurableObject {
     if (P && P.status === 'selesai') throw new AppError('Anda sudah menyelesaikan ujian ini', 'SELESAI');
     if (t > u.selesai && !(P && P.status === 'mengerjakan')) throw new AppError('Waktu ujian sudah ditutup');
     if (u.pakaiToken && str_(d.token).trim().toUpperCase() !== String(u.token).toUpperCase()) throw new AppError('Token ujian salah', 'TOKEN');
+    if (u.wajibApp && !str_(d.app, 20)) throw new AppError('Ujian ini wajib dikerjakan lewat aplikasi CBT Ujian (Android/Windows). Minta aplikasinya kepada pengawas.', 'WAJIB_APP');
     const bank = await this.getBank(u.bankId);
     if (!bank) throw new AppError('Bank soal ujian tidak ditemukan. Hubungi admin.');
     P = L.P.get(me.id); // bisa berubah selama menunggu
@@ -558,7 +559,9 @@ export class Engine extends DurableObject {
     return {
       ujian: { id: u.id, nama: u.nama, mapel: u.mapel, durasi: u.durasi, maxPelanggaran: u.maxPelanggaran, tampilNilai: u.tampilNilai, keterangan: u.keterangan },
       soal: X.soalUntukSiswa_(u, bank, me.id, P.percobaan),
-      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran
+      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran,
+      // aplikasi ujian memeriksa token keluar dari pengawas tanpa internet
+      keluarHash: await X.hashKeluar_(u.id, await X.tokenKeluar_(u.id, this.secret))
     };
   }
 
@@ -824,6 +827,7 @@ export class Engine extends DurableObject {
     for (const P of L.P.values()) if (!siswa.has(P.nis) && ok(P.kelas)) peserta.push(this.monRow(L, P));
     const uj = this.ringkas(u);
     if (kelas) uj.kelas = u.kelas.filter(k => kelas.has(k));
+    uj.tokenKeluar = await X.tokenKeluar_(u.id, this.secret);   // untuk keluar dari aplikasi ujian (Android/Windows)
     return { ujian: uj, peserta, serverTime: now(), pemilik: !!me && u.guruId === me.id, semuaKelas: !kelas };
   }
 
@@ -1012,7 +1016,7 @@ A.ujianSaya = async function (d, me) {
   return list.map(u => {
     const h = st[u.id], b = this.bankIdx.get(u.bankId);
     const item = {
-      id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi,
+      id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi, wajibApp: !!u.wajibApp,
       jumlahSoal: b ? b.jumlahSoal : u.jumlahSoal, pakaiToken: u.pakaiToken, keterangan: u.keterangan,
       jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? h.status : 'belum'
     };
@@ -1251,7 +1255,7 @@ A.saveUjian = async function (d, me) {
       bankId: bank.id, bankJudul: bank.judul, mapel: bank.mapel, tingkat: tingkatU,
       guruId: bank.guruId, guruNama: bank.guruNama, jumlahSoal: bank.soal.length,
       kelas, mulai, selesai, durasi, pengawas,
-      acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: bool_(d.pakaiToken),
+      acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: bool_(d.pakaiToken), wajibApp: bool_(d.wajibApp),
       token: bool_(d.pakaiToken) ? ((lama && lama.token) || X.buatToken_()) : '',
       maxPelanggaran: Math.max(0, Math.round(num_(d.maxPelanggaran, 0))),
       aktif: d.aktif === undefined ? true : bool_(d.aktif),
@@ -1321,6 +1325,12 @@ A.gantiTokenUjian = async function (d, me) {
 
 // ---------------------------------------------------------------- siswa (ujian)
 A.mulaiUjian = async function (d, me) { X.reqSiswa_(me); return this.mulaiInti(me, d); };
+/** Cadangan bila paket lama belum membawa sidik token keluar: periksa ke server (butuh internet). */
+A.cekTokenKeluar = async function (d, me) {
+  X.reqSiswa_(me);
+  const u = this.ujianWajib(d.ujianId);
+  return str_(d.token).trim().toUpperCase() === await X.tokenKeluar_(u.id, this.secret);
+};
 A.simpanJawaban = async function (d, me) {
   X.reqSiswa_(me);
   const u = this.ujianWajib(d.ujianId), L = await this.getL(u.id);
