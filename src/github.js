@@ -56,6 +56,9 @@ export async function unggahGambar(env, d, namaGuru) {
     const text = await r.text();
     if (r.status === 200 || r.status === 201) return { url: urlMedia(env, repo, JSON.parse(text).commit.sha, path), path };
     last = { status: r.status, text };
+    // batas sekunder serverB (±80 unggahan/menit, 500/jam): beri tahu jelas agar aplikasi menunggu lalu mencoba lagi
+    if (r.status === 429 || (r.status === 403 && /rate limit|abuse/i.test(text)) || r.headers.get('retry-after'))
+      throw new AppError('serverB sedang membatasi unggahan karena terlalu banyak gambar dalam waktu singkat. Tunggu ±1 menit lalu coba lagi.', 'BATAS');
     if (r.status !== 409 && r.status !== 422) break;
     await new Promise(ok => setTimeout(ok, 300 + Math.random() * 700));
   }
