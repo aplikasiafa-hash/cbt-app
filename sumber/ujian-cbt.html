@@ -833,16 +833,17 @@ const app = Vue.createApp({
         const r = await api('loginSiswa', { nis: this.f.nis, password: this.f.pw, perangkat: perangkatId() }, { retry: 2 });
         tokenSesi = r.token; this.user = r.user; this.sekolah = r.sekolah;
         localStorage.setItem('cbt_s_token', r.token); localStorage.setItem('cbt_s_user', JSON.stringify(r.user)); localStorage.setItem('cbt_s_sekolah', JSON.stringify(r.sekolah)); localStorage.setItem('cbt_s_sekolah_t', String(Date.now()));
-        this.f.pw = ''; this.lihatPw = false; this.layar = 'daftar'; this.muatDaftar();
+        this.f.pw = ''; this.lihatPw = false; this.layar = 'daftar'; this.muatDaftar(false, Array.isArray(r.ujian) ? r.ujian : null);
       } catch (e) { this.err = e.message; } finally { this.sibuk = false; }
     },
     bersihSesi() { tokenSesi = ''; localStorage.removeItem('cbt_s_token'); localStorage.removeItem('cbt_s_user'); },
     keluar() { this.bersihSesi(); this.user = {}; this.daftar = null; this.layar = 'login'; },
-    async muatDaftar(diam) {
+    async muatDaftar(diam, sudahAda) {
       if (!diam) this.err = '';
       this.daftarT = Date.now();
       try {
-        const list = await api('ujianSaya', {}, { retry: diam ? 1 : 3 });
+        // daftar dari jawaban login dipakai langsung (tanpa permintaan tambahan)
+        const list = sudahAda || await api('ujianSaya', {}, { retry: diam ? 1 : 3 });
         // ujian yang jawabannya masih ada di perangkat ini (belum terkirim) → tombol "Lanjutkan"
         list.forEach(u => {
           if (!paketLokal(this.user.nis, u.id)) return;

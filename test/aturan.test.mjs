@@ -6,7 +6,7 @@ let fails = 0; const ok = (n, c, i) => { console.log((c ? '  ✓ ' : '  ✗ ') +
 const ADM = (await call('loginGuru', { username: 'admin', password: 'admin123' })).data.token;
 
 console.log('Versi');
-ok('versi 2.10.0-CBT', (await call('ping')).data.versi === '2.17.0-CBT');
+ok('versi 2.10.0-CBT', (await call('ping')).data.versi === '2.18.0-CBT');
 
 console.log('Akun guru & mata pelajaran');
 let r = await call('saveGuru', { username: 'bu_sri', nama: 'Bu Sri', password: 'sri12345', role: 'guru', mapel: ['Biologi', 'Kimia'] }, ADM);

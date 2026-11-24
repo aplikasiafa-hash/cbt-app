@@ -69,6 +69,15 @@ await sleep(500);
 ok('0 koneksi terbuka → mesin ujian bisa tidur', (await koneksi()) === 0, await koneksi());
 ok('hasil tetap tersimpan di server', (await call('monitorUjian', { ujianId: U.id }, ADM)).data.peserta.find(p => p.nis === '1001').status === 'selesai');
 
+console.log('Siswa menutup aplikasi tanpa mengumpulkan → mesin ujian tidak dibangunkan tiap menit');
+const S2 = (await call('loginSiswa', { nis: '1002', password: '1002', perangkat: 'hp2' })).data;
+ok('login siswa sekaligus membawa daftar ujian (tanpa permintaan ujianSaya)', Array.isArray(S2.ujian) && S2.ujian.some(u => u.id === U.id), S2.ujian);
+r = await call('mulaiUjian', { ujianId: U.id, perangkat: 'hp2' }, S2.token);
+ok('siswa 2 mulai lewat permintaan biasa lalu pergi', r.ok, r);
+await sleep(2500);
+const dv = (await call('_dev', {})).data;
+ok('alarm berikutnya bukan 1 menit lagi, melainkan saat jawaban pending dinilai (±3 jam): ' + dv.alarmDetik + ' detik', dv.alarmDetik > 2 * 3600 && dv.alarmDetik < 4 * 3600, dv);
+
 await call('deleteUjian', { id: U.id, paksa: true, hapusHasil: true }, ADM);
 console.log(fails ? `\n${fails} GAGAL` : '\nSEMUA LULUS');
 process.exit(fails ? 1 : 0);

@@ -21,7 +21,8 @@
     // /.env, dll.) dijawab 404.html oleh lapisan aset tanpa dihitung sebagai request Worker.
     "not_found_handling": "404-page",
     // /ujian-cbt/* lewat Worker agar bisa diperiksa: hanya aplikasi CBT Ujian yang boleh membukanya.
-    "run_worker_first": ["/api", "/api/*", "/ujian-cbt", "/ujian-cbt/*"]
+    // sw.js tidak perlu diperiksa → dilayani langsung sebagai berkas statis (gratis, tidak dihitung permintaan).
+    "run_worker_first": ["/api", "/api/*", "/ujian-cbt", "/ujian-cbt/*", "!/ujian-cbt/sw.js"]
   },
 
   // Database D1 "cbt-sekolah-db". Dibuat OTOMATIS saat pemasangan pertama.

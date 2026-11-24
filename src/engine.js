@@ -284,7 +284,7 @@ export class Engine extends DurableObject {
    *  Menggantikan pemicu terjadwal tiap jam (yang membangunkan mesin ujian walau tidak ada pekerjaan). */
   async aturAlarm() {
     const t = Date.now();
-    let at = this.adaKerja() ? t + ALARM_MS : 0;
+    let at = this.waktuKerja();
     const b = this.waktuCadangan();
     if (b && (!at || b < at)) at = Math.max(b, t + 10000);
     // sesi ujian yang sudah selesai masih ada di penyimpanan internal → dibereskan pada perawatan pukul 00.00 WITA
@@ -306,6 +306,24 @@ export class Engine extends DurableObject {
     let at = uji ? Math.max((this.bubah || 0) + jeda, this.lastBackup + Math.min(60000, jeda)) : tengahMalamWITA(this.bubah || Date.now());
     if (this.cadanganGagal) at = Math.max(at, this.cadanganGagal.t + GAGAL_TUNDA_MS);
     return at;
+  }
+  /** Kapan mesin ujian benar-benar perlu bangun (waktu nyata, 0 = tidak perlu).
+   *  HEMAT PERMINTAAN: dulu alarm berbunyi tiap menit selama masih ada siswa berstatus mengerjakan (termasuk yang
+   *  menutup aplikasi tanpa mengumpulkan) → ±1.440 permintaan mesin ujian per hari. Sekarang alarm hanya dipasang untuk:
+   *  data yang belum tersimpan (1 menit lagi), dan saat jawaban "pending" harus dinilai dari cadangan server. */
+  waktuKerja() {
+    const t = now(), geser = Date.now() - t;
+    let at = 0;
+    const ambil = x => { if (x <= t) x = t + 10 * 60000; if (!at || x < at) at = x; };   // sudah lewat tapi belum beres → coba 10 menit lagi
+    for (const L of this.L.values()) {
+      if (L.dirty.size) ambil(t + ALARM_MS);
+      const u = this.ujian.get(L.id);
+      for (const P of L.P.values()) {
+        if (P.status === 'mengerjakan') { if (u) ambil(Math.max(P.deadline || 0, u.selesai) + PENDING_MS + 5000); }
+        else if (P.ver !== P.syncVer) ambil(t + ALARM_MS);
+      }
+    }
+    return at ? at + geser : 0;
   }
   adaKerja() {
     for (const L of this.L.values()) {
@@ -1047,7 +1065,8 @@ A._dev = async function (d) {
   const ukur = this.ukurBaca ? this.ukurBaca() : null;
   if (d.perKueri && this.ukurKueri) { const k = { ...this.ukurKueri }; if (d.ukurNol) for (const x in this.ukurKueri) delete this.ukurKueri[x]; return { ukur, kueri: k }; }
   if (d.ukurNol && this.ukur) Object.keys(this.ukur).forEach(k => { this.ukur[k] = 0; });
-  return { offset: d.offset, sockets: this.sockets.size, live: this.L.size, ukur };
+  const alarm = (await this.ctx.storage.getAlarm()) || 0;
+  return { offset: d.offset, sockets: this.sockets.size, live: this.L.size, ukur, alarmDetik: alarm ? Math.round((alarm - Date.now()) / 1000) : null };
 };
 
 // ---------------------------------------------------------------- masuk & daftar (juga tersedia lewat soket tunggal)
@@ -1080,7 +1099,9 @@ A.loginSiswa = async function (d) {
       throw new AppError('Akun ini sedang dipakai mengerjakan ujian di perangkat lain. Masuk di perangkat ini baru bisa setelah ujian itu selesai, atau minta pengawas melakukan "Reset login".', 'PERANGKAT');
   }
   const token = await X.signToken_({ r: 'siswa', id: String(sw.nis), n: sw.nama, k: sw.kelas, exp: now() + X.TOKEN_SISWA_JAM * 3600000 }, this.secret);
-  return { token, user: { nis: String(sw.nis), nama: sw.nama, kelas: sw.kelas }, sekolah: { namaSekolah: this.config.namaSekolah, logo: this.config.logo || '' } };
+  // HEMAT PERMINTAAN: daftar ujian hari ini ikut dikirim → halaman siswa tidak perlu meminta "ujianSaya" lagi
+  const ujian = await A.ujianSaya.call(this, {}, { r: 'siswa', id: String(sw.nis), n: sw.nama, k: sw.kelas });
+  return { token, user: { nis: String(sw.nis), nama: sw.nama, kelas: sw.kelas }, sekolah: { namaSekolah: this.config.namaSekolah, logo: this.config.logo || '' }, ujian };
 };
 A.loginGuru = async function (d) {
   const username = str_(d.username, 60).trim().toLowerCase(), k = 'g:' + username;

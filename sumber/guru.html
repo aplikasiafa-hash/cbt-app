@@ -1327,7 +1327,7 @@ fieldset.fs-polos:disabled{opacity:.78;pointer-events:none}   /* tautan & tombol
       <div class="pakai-kepala">
         <div><h3>Penggunaan harian serverC</h3>
           <p class="muted small">Hari ini<template v-if="pk.r && pk.r.tanggal"> ({{ fmtTgl(Date.parse(pk.r.tanggal)) }})</template> · pulih setiap pukul 08.00 WITA</p></div>
-        <button class="btn btn-sm" @click="muatPakai" :disabled="pk.muat" title="Hanya memuat ulang angka penggunaan ini">{{ pk.muat ? 'Memuat…' : '↻ Muat ulang' }}</button>
+        <button class="btn btn-sm" @click="muatPakai(true)" :disabled="pk.muat" title="Hanya memuat ulang angka penggunaan ini">{{ pk.muat ? 'Memuat…' : '↻ Muat ulang' }}</button>
       </div>
       <template v-if="pk.r && pk.r.siap">
         <div class="pakai-grup" v-for="g in grupPakai" :key="g.judul">
@@ -1652,7 +1652,36 @@ async function apiSok(action, data, tok, onAuth) {
 }
 
 Sok.aturWaktu = n => { S.offset = n - Date.now(); };
+// HEMAT PERMINTAAN: data yang hanya dibaca disimpan sebentar di perangkat (berlaku juga untuk tab lain / buka ulang),
+// permintaan yang sama dan sedang berjalan digabung. Setiap perubahan (simpan, hapus, impor, …) mengosongkan simpanan
+// sehingga data terbaru langsung terlihat. Tombol "Muat ulang"/"Perbarui" selalu mengambil langsung dari server.
+const BACA_SIMPAN = { ping: 86400, getConfig: 600, dashboard: 60, listBank: 60, listUjian: 45, listGuru: 300, listSiswa: 180, tokenUjian: 20, waktuSelesai: 300, statusSistem: 60, pemakaianHarian: 300 };
+// selalu segar: isi bank soal & status kuncinya (bisa diubah admin dari perangkat lain), monitoring, hasil, kata sandi
+const BACA_SAJA = new Set(['getBank', 'monitorUjian', 'hasilUjian', 'sandiSiswa', 'sandiGuru', 'loginGuru']);
+const sedangJalan = new Map();
+const kunciSimpan = (action, data) => 'cbt_gc:' + ((S.user && S.user.id) || '-') + ':' + action + ':' + JSON.stringify(data || {});
+function bacaSimpan(k, detik) { try { const o = JSON.parse(localStorage.getItem(k) || 'null'); if (o && Date.now() - o.t < detik * 1000) return o.d; } catch (e) {} return undefined; }
+function tulisSimpan(k, d) {
+  const v = JSON.stringify({ t: Date.now(), d });
+  try { localStorage.setItem(k, v); } catch (e) { bersihSimpan(); try { localStorage.setItem(k, v); } catch (e2) {} }
+}
+function bersihSimpan() { try { Object.keys(localStorage).filter(k => k.startsWith('cbt_gc:')).forEach(k => localStorage.removeItem(k)); } catch (e) {} }
 async function api(action, data = {}, opt = {}) {
+  const ubah = !(action in BACA_SIMPAN) && !BACA_SAJA.has(action) || (action === 'waktuSelesai' && data && data.menit !== undefined);
+  const detik = ubah ? 0 : (BACA_SIMPAN[action] || 0);
+  if (detik) {
+    const k = kunciSimpan(action, data);
+    if (!opt.segar) { const d = bacaSimpan(k, detik); if (d !== undefined) return d; }
+    if (sedangJalan.has(k)) return sedangJalan.get(k).then(d => JSON.parse(JSON.stringify(d)));
+    const p = apiKirim(action, data, opt).then(d => { tulisSimpan(k, d); return d; }).finally(() => sedangJalan.delete(k));
+    sedangJalan.set(k, p);
+    return p;
+  }
+  const d = await apiKirim(action, data, opt);
+  if (ubah) bersihSimpan();
+  return d;
+}
+async function apiKirim(action, data = {}, opt = {}) {
   if (!API_URL) throw new Error('Alamat backend (API_URL) belum diatur');
   // Guru & admin selalu memakai permintaan biasa (bukan koneksi terbuka): setiap permintaan hanya menyalakan mesin ujian
   // sekejap, lalu mesin ujian bisa tidur lagi. Data tetap tersimpan di server. Koneksi langsung hanya untuk Monitoring.
@@ -1683,6 +1712,7 @@ async function coba(fn, pesanOk) {
   catch (e) { toast(e.message, 'err', 6000); throw e; }
 }
 function keluar(kadaluarsa) {
+  bersihSimpan();
   S.token = ''; S.user = null;
   localStorage.removeItem('cbt_g_token'); localStorage.removeItem('cbt_g_user');
   if (kadaluarsa === true) toast('Sesi berakhir, silakan masuk lagi', 'err');
@@ -2598,7 +2628,7 @@ app.component('v-login', {
       try {
         const r = await api('loginGuru', { username: this.u, password: this.p }, { retry: 2 });
         S.token = r.token; S.user = r.user; S.config = r.config;
-        localStorage.setItem('cbt_g_token', r.token); localStorage.setItem('cbt_g_user', JSON.stringify(r.user)); localStorage.setItem('cbt_g_config', JSON.stringify(r.config));
+        localStorage.setItem('cbt_g_token', r.token); localStorage.setItem('cbt_g_user', JSON.stringify(r.user)); localStorage.setItem('cbt_g_config', JSON.stringify(r.config)); localStorage.setItem('cbt_g_config_t', String(Date.now()));
         if (!location.hash || location.hash === '#/') location.hash = '#/beranda';
       } catch (e) { this.err = e.message; } finally { this.loading = false; }
     }
@@ -2624,7 +2654,7 @@ app.component('kartu-token', {
     terima(r) { this.r = r; this.pilih = r.mode; if (r.menit) this.menit = r.menit; },
     async muat(awal) {
       this.muatJalan = true;
-      try { this.terima(await api('tokenUjian')); if (awal !== true) toast(this.r.nilai ? 'Token terbaru: ' + this.r.nilai : 'Token dimuat ulang'); }
+      try { this.terima(await api('tokenUjian', {}, { segar: awal !== true })); if (awal !== true) toast(this.r.nilai ? 'Token terbaru: ' + this.r.nilai : 'Token dimuat ulang'); }
       catch (e) { toast(e.message, 'err'); } finally { this.muatJalan = false; }
     },
     async atur(mode) {
@@ -3071,7 +3101,7 @@ app.component('v-monitor', {
   computed: {
     teksStatus() {
       if (this.langsung) return '● Status diperbarui otomatis';
-      if (this.sepi) return this.ditutup ? 'Ujian sudah ditutup' : 'Tidak ada siswa yang sedang mengerjakan · diperiksa tiap menit';
+      if (this.sepi) return this.ditutup ? 'Ujian sudah ditutup' : 'Tidak ada siswa yang sedang mengerjakan · diperiksa berkala';
       return this.terputus ? 'Koneksi terputus' : 'Menyambung…';
     },
     ditutup() { return !!(this.d && sekarang() > this.d.ujian.selesai + 120000 && !this.d.peserta.some(p => p.status === 'mengerjakan' || p.status === 'pending')); },
@@ -3103,12 +3133,19 @@ app.component('v-monitor', {
     },
     modeSepi() {
       this.sepi = true; this.langsung = false; this.terputus = false;
-      clearInterval(this.tCek);
-      this.tCek = setInterval(async () => {
-        if (this.mati || this.langsung || document.hidden || this.ditutup) return;
-        await this.muat(true);
-        if (!this.mati && this.adaAktif()) { clearInterval(this.tCek); this.sepi = false; this.sambung(); }
-      }, 60000);
+      clearTimeout(this.tCek);
+      let jeda = 60000;
+      const cek = async () => {
+        if (this.mati || this.langsung || this.ditutup) return;   // ujian sudah ditutup → berhenti (tekan Perbarui bila perlu)
+        if (!document.hidden) {
+          await this.muat(true);
+          if (this.mati) return;
+          if (this.adaAktif()) { this.sepi = false; return this.sambung(); }
+          jeda = Math.min(jeda * 2, 600000);
+        }
+        this.tCek = setTimeout(cek, jeda);
+      };
+      this.tCek = setTimeout(cek, jeda);
     },
     sambung() {
       if (!WS_URL || this.mati) { if (!this.d) this.muat(); return; }
@@ -3120,7 +3157,7 @@ app.component('v-monitor', {
       if (!(WS_URL && Sok.tersedia())) return this.muat();
       await this.muat(true);
       if (this.mati) return;
-      if (this.adaAktif()) { clearInterval(this.tCek); this.sepi = false; this.sambung(); } else this.modeSepi();
+      if (this.adaAktif()) { clearTimeout(this.tCek); this.sepi = false; this.sambung(); } else this.modeSepi();
     },
     pesan(m) {
       if (this.mati) return;
@@ -3139,9 +3176,10 @@ app.component('v-monitor', {
     },
     putus() {
       this.mati = true;
-      clearInterval(this.tCek);
+      clearTimeout(this.tCek);
       Sok.pendengar.delete(this.dengar);
       Sok.tutup();   // keluar dari Monitoring → koneksi ditutup
+      clearTimeout(this.tCek);
       this.langsung = false;
     },
     aksi(p) {
@@ -3495,10 +3533,9 @@ app.component('v-pengaturan', {
     }
   },
   async mounted() {
-    try { this.c = await api('getConfig'); } catch (e) {}
+    try { this.c = await api('getConfig', {}, { segar: true }); } catch (e) {}
     this.c.tingkat = this.c.tingkat || []; this.c.kelas = this.c.kelas || []; this.c.mapel = this.c.mapel || [];
     this.asli = JSON.stringify(this.c);
-    api('ping').then(r => this.versi = r.versi).catch(() => {});
     this.muatStatus();
     this.muatPakai();
   },
@@ -3516,11 +3553,11 @@ app.component('v-pengaturan', {
       catch (e) { toast(e.message, 'err'); } finally { this.sibukKunci = false; }
     },
     /** hanya angka penggunaan harian yang dimuat ulang (bukan seluruh halaman) */
-    async muatPakai() {
+    async muatPakai(segar) {
       if (this.pk.muat) return;
       this.pk.muat = true; this.pk.galat = '';
       try {
-        this.pk.r = await api('pemakaianHarian');
+        this.pk.r = await api('pemakaianHarian', {}, { segar: segar === true });
         this.pakaiSiap = !(this.pk.r.siap === false && this.pk.r.alasan === 'token');
         localStorage.setItem('cbt_pakai_siap', this.pakaiSiap ? '1' : '0');
       }
@@ -3596,7 +3633,7 @@ app.component('v-pengaturan', {
       if (!await tanya('Muat ulang data?', 'Data guru, bank soal, jadwal, dan pengaturan dibaca ulang dari serverC. Hanya perlu bila data di serverC diubah di luar aplikasi.', { ok: 'Muat ulang' })) return;
       try { const r = await api('muatUlangData'); toast(`Dimuat ulang: ${r.guru} guru, ${r.bank} bank soal, ${r.ujian} jadwal`); this.muatStatus && this.muatStatus(); } catch (e) { toast(e.message, 'err'); }
     },
-    muatStatus() { api('statusSistem').then(r => this.st = r).catch(() => {}); },
+    muatStatus(segar) { api('statusSistem', {}, { segar: !!segar }).then(r => { this.st = r; this.versi = r.versi; }).catch(() => {}); },
     async sinkron() {
       this.sibukSync = true;
       try { const r = await api('sinkronSekarang'); toast(pesanSinkron(r), r.cadangan && r.cadangan.error ? 'err' : 'ok', 6000); this.muatStatus(); }
