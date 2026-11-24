@@ -37,21 +37,25 @@
   "durable_objects": { "bindings": [{ "name": "ENGINE", "class_name": "Engine" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Engine"] }],
 
-  // Cukup sekali sehari (06.00 WITA = 22.00 UTC) sebagai jaring pengaman. Kumpul otomatis, sinkron hasil, dan
-  // cadangan GitHub dijalankan alarm internal mesin ujian HANYA saat ada pekerjaan (hemat "Rows read" D1).
-  "triggers": { "crons": ["0 22 * * *"] },
+  // Perawatan harian pukul 00.00 WITA (= 16.00 UTC): hasil yang belum tersimpan dikirim ke database, sesi ujian
+  // yang sudah selesai dibereskan dari penyimpanan internal, dan cadangan serverB dikirim — HANYA bila ada perubahan.
+  // Selama ujian, mesin ujian merawat dirinya sendiri; di luar jam ujian ia tidur (tidak memakai kuota).
+  "triggers": { "crons": ["0 16 * * *"] },
 
+  // Setelan khusus tiap sekolah TIDAK ditulis di sini, tetapi di dashboard serverC:
+  // Workers & Pages → (Worker sekolah) → Settings → Variables and Secrets → Add
+  //   Text   MEDIA_REPO     akun-github-sekolah/cbt-media   (repo PUBLIK untuk gambar soal)
+  //   Text   DATA_REPO      akun-github-sekolah/cbt-data    (repo PRIVAT untuk cadangan soal & hasil)
+  //   Text   CF_ACCOUNT_ID  ID akun serverC sekolah          (untuk panel Penggunaan harian)
+  //   Secret GITHUB_TOKEN   token github_pat_…
+  //   Secret CF_API_TOKEN   token API serverC (opsional)
+  // keep_vars = true: setiap pemasangan ulang dari GitHub TIDAK menghapus/menimpa isian dashboard di atas,
+  // jadi berkas repo ini aman diunggah ke repo sekolah mana pun.
+  "keep_vars": true,
   "vars": {
-    // Akun GitHub: aplikasiafa-hash
-    // Repo PUBLIK untuk gambar soal
-    "MEDIA_REPO": "aplikasiafa-hash/cbt-media",
-    // Repo PRIVAT untuk cadangan otomatis soal & hasil ("" = tidak dipakai)
-    "DATA_REPO": "aplikasiafa-hash/cbt-data",
     "BRANCH": "main",
     "MEDIA_CDN": "jsdelivr"
   },
-  // GITHUB_TOKEN TIDAK ditulis di sini. Simpan di dashboard Cloudflare:
-  // Workers & Pages → cbt-sekolah → Settings → Variables and Secrets → Add → Secret
 
   "observability": { "enabled": true, "head_sampling_rate": 0.05 }
 }

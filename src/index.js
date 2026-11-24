@@ -3,7 +3,8 @@
  *  CBT SEKOLAH — Backend Cloudflare (Workers + D1 + Durable Objects) — GRATIS
  * ============================================================================
  *  Worker ini sangat ringan (batas gratis: 10 ms CPU per permintaan):
- *   - ping, loginSiswa, loginGuru, ujianSaya, getConfig  → langsung ke D1
+ *   - ping, loginGuru, getConfig                        → langsung ke D1
+ *   - loginSiswa, ujianSaya → mesin ujian (perlu tahu siswa yang sedang ujian & token ujian yang berlaku)
  *   - /api/ws (WebSocket ujian & monitoring)            → Durable Object "Engine"
  *   - aksi lain (guru/admin, mulai/simpan/selesai)      → Durable Object "Engine"
  *  Aplikasi guru & siswa (folder public/) disajikan sebagai aset statis (gratis, tidak dihitung kuota).
@@ -11,20 +12,20 @@
  */
 import { Engine } from './engine.js';
 import {
-  VERSI, TOKEN_GURU_JAM, TOKEN_SISWA_JAM, CONFIG_DEFAULT, AppError, errInfo, now, setOffset,
-  str_, cekPw_, signToken_, verifyToken_, reqSiswa_, ujianHariIni_
+  VERSI, TOKEN_GURU_JAM, CONFIG_DEFAULT, AppError, errInfo, now, setOffset,
+  str_, cekPw_, signToken_, verifyToken_
 } from './shared.js';
 
 export { Engine };
 
-const LOKAL = new Set(['ping', 'loginSiswa', 'loginGuru', 'ujianSaya', 'getConfig']);
+const LOKAL = new Set(['ping', 'loginGuru', 'getConfig']);
 const HDR = { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
 const jres = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: HDR });
 const okRes = data => jres({ ok: true, data: data === undefined ? null : data, serverTime: now() });
 const errRes = e => { const i = errInfo(e); if (!(e && e.app)) console.error(e && e.stack || e); return jres({ ok: false, error: i.msg, code: i.code, serverTime: now() }); };
 
 // cache per-isolate (hemat kuota baca D1)
-let SECRET = null, CONFIG = null, CONFIG_T = 0, UJIAN = null, UJIAN_T = 0;
+let SECRET = null, CONFIG = null, CONFIG_T = 0, KUNCI_LINK = null, KUNCI_LINK_T = 0;
 
 const engine = env => env.ENGINE.get(env.ENGINE.idFromName('utama'));
 
@@ -43,14 +44,17 @@ async function config(env) {
   if (CONFIG && Date.now() - CONFIG_T < 60000) return CONFIG;
   await secret(env);
   const r = await env.DB.prepare(`SELECT v FROM kv WHERE k='config'`).first();
-  CONFIG = r ? JSON.parse(r.v) : CONFIG_DEFAULT; CONFIG_T = Date.now();
+  CONFIG = { ...CONFIG_DEFAULT, ...(r ? JSON.parse(r.v) : {}) }; CONFIG_T = Date.now();
   return CONFIG;
 }
-async function daftarUjian(env) {
-  if (UJIAN && Date.now() - UJIAN_T < 20000) return UJIAN;
-  const r = await env.DB.prepare(`SELECT data FROM ujian WHERE selesai >= ?`).bind(now() - 3 * 86400000).all();
-  UJIAN = r.results.map(x => JSON.parse(x.data)); UJIAN_T = Date.now();
-  return UJIAN;
+/** Sakelar "kunci link" (Pengaturan, admin). Tersimpan di kv 'kunci_link': '0' = mati; selain itu aktif.
+ *  Dibaca paling sering sekali per 30 detik per isolate, dan hanya untuk permintaan halaman ujian tanpa kunci. */
+async function kunciLinkAktif(env) {
+  if (KUNCI_LINK !== null && Date.now() - KUNCI_LINK_T < 30000) return KUNCI_LINK;
+  try { const r = await env.DB.prepare(`SELECT v FROM kv WHERE k='kunci_link'`).first(); KUNCI_LINK = !(r && r.v === '0'); }
+  catch (e) { KUNCI_LINK = true; }   // belum ada tabel → aktif (aman)
+  KUNCI_LINK_T = Date.now();
+  return KUNCI_LINK;
 }
 
 // --------------------------------------------------------------------------
@@ -68,23 +72,6 @@ const AKSI = {
   async ping(d, env) {
     const c = await config(env);
     return { app: 'CBT Sekolah', versi: VERSI, namaSekolah: c.namaSekolah, logo: c.logo || '', tahunAjaran: c.tahunAjaran, semester: c.semester };
-  },
-
-  async loginSiswa(d, env) {
-    const sec = await secret(env), nis = str_(d.nis, 40).trim();
-    const [g, s] = await env.DB.batch([
-      env.DB.prepare(`SELECT n, t FROM gagal WHERE k = ?`).bind('s:' + nis),
-      env.DB.prepare(`SELECT nis, nama, kelas, salt, hash FROM siswa WHERE nis = ?`).bind(nis)
-    ]);
-    cekGagal(g.results[0]);
-    const sw = s.results[0];
-    if (!sw || !(await cekPw_(sw, d.password))) {
-      await env.DB.prepare(SQL_GAGAL).bind('s:' + nis, now()).run();
-      throw new AppError('NIS atau kata sandi salah');
-    }
-    const token = await signToken_({ r: 'siswa', id: sw.nis, n: sw.nama, k: sw.kelas, exp: now() + TOKEN_SISWA_JAM * 3600000 }, sec);
-    const c = await config(env);
-    return { token, user: { nis: sw.nis, nama: sw.nama, kelas: sw.kelas }, sekolah: { namaSekolah: c.namaSekolah, logo: c.logo || '' } };
   },
 
   async loginGuru(d, env) {
@@ -108,31 +95,6 @@ const AKSI = {
   async getConfig(d, env, tok) {
     await verifyToken_(tok, await secret(env));
     return config(env);
-  },
-
-  async ujianSaya(d, env, tok) {
-    const me = reqSiswa_(await verifyToken_(tok, await secret(env)));
-    const t = now();
-    const list = (await daftarUjian(env))
-      .filter(u => u.aktif && (u.kelas || []).indexOf(me.k) >= 0 && ujianHariIni_(u, t))   // hanya jadwal hari ini
-      .sort((a, b) => a.mulai - b.mulai);
-    const hasil = {};
-    if (list.length) {
-      const r = await env.DB.prepare(`SELECT ujian_id, nilai, perlu, (status = 'otomatis') AS oto FROM hasil WHERE nis = ?1 AND ujian_id IN (SELECT value FROM json_each(?2))`)
-        .bind(me.id, JSON.stringify(list.map(u => u.id))).all();
-      r.results.forEach(x => { hasil[x.ujian_id] = x; });
-    }
-    return list.map(u => {
-      const h = hasil[u.id];
-      const item = {
-        id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi, wajibApp: !!u.wajibApp,
-        jumlahSoal: u.jumlahSoal, pakaiToken: u.pakaiToken, keterangan: u.keterangan,
-        jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? 'selesai' : 'belum'
-      };
-      if (h && u.tampilNilai) { item.nilai = h.nilai; item.perluKoreksi = h.perlu; }
-      if (h && h.oto) item.susulan = true;   // dinilai otomatis: jawaban dari perangkat masih diterima
-      return item;
-    });
   }
 };
 
@@ -151,7 +113,7 @@ async function api(req, env, url) {
   try { body = JSON.parse(text); } catch (e) { return errRes(new AppError('Format permintaan tidak valid')); }
   aksi = body.action;
   if (aksi === '_dev' && env.DEV_MODE === '1') {
-    setOffset(body.data && body.data.offset); UJIAN = null; CONFIG = null;
+    setOffset(body.data && body.data.offset); CONFIG = null;
   }
   if (!LOKAL.has(aksi)) {
     const r = await engine(env).fetch('https://engine/api', { method: 'POST', body: text, headers: { 'content-type': 'text/plain' } });
@@ -179,8 +141,9 @@ export default {
     // kunci rahasia (APP_KUNCI) ke User-Agent; browser biasa tidak punya → dijawab 404.
     // Kunci diatur sebagai rahasia Worker (wrangler secret put APP_KUNCI) DAN disatukan ke aplikasi saat dibangun.
     // Bila APP_KUNCI tidak diatur, gerbang MATI (halaman terbuka seperti biasa) agar tidak mengunci diri sendiri.
+    // Admin juga bisa mematikan/menyalakan gerbang dari Pengaturan → "Kunci link" tanpa menghapus rahasianya.
     if (p === '/ujian-cbt' || url.pathname.startsWith('/ujian-cbt/')) {
-      if (env.APP_KUNCI && !(req.headers.get('user-agent') || '').includes('k/' + env.APP_KUNCI)) {
+      if (env.APP_KUNCI && !(req.headers.get('user-agent') || '').includes('k/' + env.APP_KUNCI) && await kunciLinkAktif(env)) {
         let body = 'Tidak ditemukan';
         try { body = await (await env.ASSETS.fetch(new URL('/404.html', url))).text(); } catch (e) {}
         return new Response(body, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'vary': 'User-Agent' } });

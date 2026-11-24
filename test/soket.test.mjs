@@ -4,6 +4,7 @@ const WSB = BASE.replace(/^http/, 'ws');
 let fails = 0, sambungan = 0;
 const ok = (n, c, info) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c ? '' : '  ' + JSON.stringify(info).slice(0, 400))); if (!c) fails++; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const http = async (action, data = {}, token = '') => (await fetch(BASE + '/api?a=' + action, { method: 'POST', body: JSON.stringify({ action, data, token }) })).json();
 
 function soket() {
   sambungan++;
@@ -53,7 +54,7 @@ const kecil = r.data; kecil.soal = kecil.soal.slice(0, 7);
 await g.rpc('saveBank', { bank: kecil }, ADM);
 const t0 = Date.now();
 r = await g.rpc('saveUjian', { nama: 'Uji Soket', bankId: 'bcontoh01', kelas: ['X-1'], mulai: t0 - 60000, selesai: t0 + 3600000, durasi: 60, tampilNilai: true, pakaiToken: true }, ADM);
-ok('atur jadwal lewat soket', r.ok && r.data.token, r);
+ok('atur jadwal lewat soket', r.ok && r.data.id && r.data.token === '', r);
 const U = r.data;
 g.kirimJ({ t: 'pantau', tok: ADM, m: U.id });
 const snap = await g.tunggu(m => m.t === 'snap');
@@ -92,24 +93,24 @@ ok('selesai + nilai lewat soket', hs && hs.data.status === 'selesai' && hs.data.
 const ds = await g.tunggu(m => m.t === 'diff' && m.rows.some(x => x.nis === '1001' && x.status === 'selesai'), 10000);
 ok('monitor guru: status "selesai" muncul', !!ds, ds);
 const tutup = await Promise.race([s.tutup.then(() => true), sleep(4500).then(() => false)]);
-ok('koneksi TIDAK ditutup setelah selesai (dipakai lagi untuk daftar)', !tutup);
-r = await s.rpc('ujianSaya', {}, S1);
-ok('daftar menunjukkan selesai + nilai (tanpa koneksi baru)', r.ok && r.data.find(u => u.id === U.id).status === 'selesai' && r.data.find(u => u.id === U.id).nilai > 0, r.data);
+ok('koneksi ditutup server setelah selesai (mesin ujian bisa tidur walau halaman tetap terbuka)', tutup);
+r = await http('ujianSaya', {}, S1);
+ok('daftar menunjukkan selesai + nilai (permintaan biasa)', r.ok && r.data.find(u => u.id === U.id).status === 'selesai' && r.data.find(u => u.id === U.id).nilai > 0, r.data);
 
 console.log('Reset & pindah perangkat');
-r = await g.rpc('resetPeserta', { ujianId: U.id, nis: '1001' }, ADM);
+r = await http('resetPeserta', { ujianId: U.id, nis: '1001' }, ADM);
 ok('reset oleh admin', r.ok, r);
-r = await s.rpc('mulaiUjian', { ujianId: U.id, token: U.token, perangkat: 'hpA' }, S1);
-s.kirimJ({ t: 'ikut', tok: S1, u: U.id, p: 'hpA' }); await s.tunggu(m => m.t === 'hai');
+const sa = soket(); await sa.terbuka;
+r = await sa.rpc('mulaiUjian', { ujianId: U.id, token: U.token, perangkat: 'hpA' }, S1);
+sa.kirimJ({ t: 'ikut', tok: S1, u: U.id, p: 'hpA' }); await sa.tunggu(m => m.t === 'hai');
 const s2 = soket(); await s2.terbuka;
-await s2.rpc('resetLogin', { ujianId: U.id, nis: '1001' }, ADM).then(x => x);
-r = await g.rpc('resetLogin', { ujianId: U.id, nis: '1001' }, ADM);
+r = await http('resetLogin', { ujianId: U.id, nis: '1001' }, ADM);
 r = await s2.rpc('mulaiUjian', { ujianId: U.id, token: U.token, perangkat: 'hpB' }, S1);
 ok('lanjut di perangkat lain setelah reset login', r.ok, r);
-const tendang = await s.tunggu(m => m.t === 'err' && m.code === 'PERANGKAT');
-ok('perangkat lama diberi tahu, koneksinya tetap hidup', !!tendang && (await s.rpc('ping')).ok, tendang);
+const tendang = await sa.tunggu(m => m.t === 'err' && m.code === 'PERANGKAT');
+ok('perangkat lama diberi tahu, lalu koneksinya ditutup', !!tendang && await Promise.race([sa.tutup.then(() => true), sleep(4000).then(() => false)]), tendang);
 g.kirimJ({ t: 'lepas' });
 
-console.log(`\nKoneksi dibuka: ${sambungan} (guru 1, siswa 1, perangkat kedua 1) = ${sambungan} request kuota untuk seluruh alur di atas`);
+console.log(`\nKoneksi dibuka: ${sambungan}`);
 console.log(fails ? `\n${fails} GAGAL` : '\nSEMUA LULUS');
 process.exit(fails ? 1 : 0);

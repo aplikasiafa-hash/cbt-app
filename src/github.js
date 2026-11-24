@@ -27,13 +27,16 @@ export async function gh(env, method, path, body, accept) {
 }
 /** Pesan singkat tanpa detail layanan. */
 function alasan(status) {
-  const k = { 401: 'token tidak valid atau kedaluwarsa', 403: 'akses ditolak (periksa izin token)', 404: 'penyimpanan tidak ditemukan atau token tidak punya akses', 409: 'sedang dipakai, coba lagi', 422: 'sedang dipakai, coba lagi', 429: 'terlalu banyak permintaan, coba lagi nanti' }[status];
+  const k = { 401: 'token tidak valid atau kedaluwarsa', 403: 'akses ditolak (periksa izin token)', 404: 'penyimpanan tidak ditemukan atau token tidak punya akses', 409: 'sedang dipakai, coba lagi', 422: 'isi kiriman ditolak', 429: 'terlalu banyak permintaan, coba lagi nanti' }[status];
   return 'serverB menolak (' + status + (k ? ': ' + k : status >= 500 ? ': server sibuk' : '') + ')';
 }
 async function ghJson(env, method, path, body) {
   const r = await gh(env, method, path, body);
   const text = await r.text();
-  if (!r.ok) { const e = new AppError(alasan(r.status), r.status === 409 || r.status === 422 ? 'CONFLICT' : (r.status >= 500 || r.status === 429 ? 'BUSY' : 'ERR')); e.status = r.status; throw e; }
+  if (!r.ok) {
+    console.log('serverB', method.toUpperCase(), path.replace(/^\/repos\/[^/]+\/[^/]+/, ''), r.status, text.slice(0, 300));
+    const e = new AppError(alasan(r.status), r.status === 409 ? 'CONFLICT' : (r.status >= 500 || r.status === 429 ? 'BUSY' : 'ERR')); e.status = r.status; throw e;
+  }
   return text ? JSON.parse(text) : {};
 }
 
@@ -100,7 +103,13 @@ export async function commitFiles(env, repo, files, message) {
       await init.text();
       continue;
     }
-    const tree = paths.map(p => files[p] === null ? { path: p, mode: '100644', type: 'blob', sha: null } : { path: p, mode: '100644', type: 'blob', content: files[p] });
+    // serverB menolak (422) penghapusan berkas yang tidak ada — mis. bank soal dibuat lalu dihapus sebelum sempat dicadangkan.
+    // Penghapusan seperti itu cukup dilewati; berkas lain tetap dikirim.
+    const hapus = paths.filter(p => files[p] === null);
+    const ada = hapus.length ? await berkasAda(env, repo, baseTree, hapus) : null;
+    const tree = paths.filter(p => files[p] !== null || ada.has(p))
+      .map(p => files[p] === null ? { path: p, mode: '100644', type: 'blob', sha: null } : { path: p, mode: '100644', type: 'blob', content: files[p] });
+    if (!tree.length) return null;                                    // tidak ada yang berubah
     const t = await ghJson(env, 'post', '/repos/' + repo + '/git/trees', { base_tree: baseTree, tree });
     const cm = await ghJson(env, 'post', '/repos/' + repo + '/git/commits', { message, tree: t.sha, parents: [headSha] });
     const u = await gh(env, 'patch', '/repos/' + repo + '/git/refs/heads/' + br, { sha: cm.sha, force: false });
@@ -110,6 +119,30 @@ export async function commitFiles(env, repo, files, message) {
     await new Promise(ok => setTimeout(ok, 300 + Math.random() * 700));
   }
   throw new AppError('serverB sedang sibuk, coba lagi', 'BUSY');
+}
+
+/** Dari daftar jalur, mana yang benar-benar ada sebagai berkas di tree dasar. Membaca tree per folder (tanpa isi berkas). */
+async function berkasAda(env, repo, baseTree, paths) {
+  const ada = new Set(), simpan = new Map();
+  const buka = async sha => {
+    if (!simpan.has(sha)) {
+      const t = await ghJson(env, 'get', '/repos/' + repo + '/git/trees/' + encodeURIComponent(sha));
+      simpan.set(sha, new Map((t.tree || []).map(e => [e.path, e])));
+    }
+    return simpan.get(sha);
+  };
+  for (const p of paths) {
+    const seg = p.split('/');
+    let sha = baseTree, ok = true;
+    for (let i = 0; i < seg.length && ok; i++) {
+      const e = (await buka(sha)).get(seg[i]);
+      if (!e) ok = false;
+      else if (i < seg.length - 1) { if (e.type === 'tree') sha = e.sha; else ok = false; }
+      else ok = e.type === 'blob';
+    }
+    if (ok) ada.add(p);
+  }
+  return ada;
 }
 
 // ---------------------------------------------------------------------------

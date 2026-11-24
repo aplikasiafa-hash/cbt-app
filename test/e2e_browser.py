@@ -37,7 +37,8 @@ adm = call('loginGuru', {'username': 'admin', 'password': 'admin123'})['data']['
 bank = call('listBank', {}, adm)['data'][0]['id']
 t0 = int(time.time() * 1000)
 U = call('saveUjian', {'nama': 'Uji Browser', 'bankId': bank, 'kelas': ['X-1'], 'mulai': t0 - 60000, 'selesai': t0 + 7200000, 'durasi': 60,
-                       'acakSoal': False, 'acakOpsi': False, 'tampilNilai': True, 'pakaiToken': True}, adm)['data']
+                       'acakSoal': False, 'acakOpsi': False, 'tampilNilai': True}, adm)['data']
+U['token'] = call('aturTokenUjian', {'mode': 'manual', 'nilai': 'UJI77'}, adm)['data']['nilai']   # satu token untuk semua ujian
 
 with sync_playwright() as p:
     b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox', '--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks'])
@@ -53,8 +54,8 @@ with sync_playwright() as p:
     g.wait_for_selector('text=Beranda', timeout=10000)
     ok('guru: login & beranda', True)
     g.goto(BASE + '/guru/#/monitor/' + U['id'])
-    g.wait_for_selector('text=● Status diperbarui otomatis', timeout=10000)
-    ok('guru: monitor tersambung langsung (WebSocket)', g.is_visible('text=● Status diperbarui otomatis'))
+    g.wait_for_selector('text=Tidak ada siswa yang sedang mengerjakan', timeout=10000)
+    ok('guru: belum ada yang mengerjakan → monitor tidak membuka koneksi langsung', call('_dev', {})['data']['sockets'] == 0, call('_dev', {})['data'])
     ok('guru: token tampil', g.is_visible('text=' + U['token']))
 
     # ---------- siswa
@@ -78,7 +79,10 @@ with sync_playwright() as p:
     s.click('.opsi >> nth=1')        # jawab soal 1 (B = 16, benar)
     s.wait_for_selector('text=Tersimpan di server', timeout=15000)
     ok('siswa: "Tersimpan di server" (autosave WebSocket di-ack)', True)
-    # monitor guru menerima perubahan tanpa refresh
+    # pengawas menekan Perbarui (atau menunggu cek tiap menit) → koneksi langsung karena ada yang mengerjakan
+    g.click('button:has-text("Perbarui")')
+    g.wait_for_selector('text=● Status diperbarui otomatis', timeout=10000)
+    ok('guru: ada siswa mengerjakan → monitor tersambung langsung', True)
     g.wait_for_function("() => [...document.querySelectorAll('tr')].some(tr => tr.textContent.includes('1001') && tr.textContent.includes('Mengerjakan'))", timeout=15000)
     ok('guru: status "Mengerjakan" muncul otomatis di monitor', True)
     g.screenshot(path='/tmp/shot_monitor.png', full_page=False)
@@ -94,6 +98,11 @@ with sync_playwright() as p:
     s.screenshot(path='/tmp/shot_selesai.png')
     g.wait_for_function("() => [...document.querySelectorAll('tr')].some(tr => tr.textContent.includes('1001') && /Selesai/i.test(tr.textContent))", timeout=15000)
     ok('guru: status Selesai muncul otomatis', True)
+    g.wait_for_selector('text=Tidak ada siswa yang sedang mengerjakan', timeout=40000)
+    ok('guru: siswa terakhir selesai → monitor kembali ke cek berkala', True)
+    time.sleep(2)
+    ok('siswa tetap di halaman, monitor tetap terbuka → 0 koneksi (mesin ujian bisa tidur)', call('_dev', {})['data']['sockets'] == 0, call('_dev', {})['data'])
+    ok('siswa: halaman selesai tetap tampil', s.is_visible('.selesai-box'))
     ok('tanpa error JavaScript (guru)', not errs, errs)
     ok('tanpa error JavaScript (siswa)', not serr, serr)
     b.close()

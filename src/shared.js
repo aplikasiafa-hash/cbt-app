@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.10.0-CBT';
+export const VERSI = '2.17.0-CBT';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -123,6 +123,12 @@ export async function verifyToken_(tok, secret) {
   return p;
 }
 export function reqGuru_(me) { if (me.r !== 'guru' && me.r !== 'admin') throw new AppError('Akses khusus guru', 'AUTH'); return me; }
+/** Penolakan saat bank soal dikunci admin (kode KUNCI agar aplikasi guru bisa menampilkan status terkunci). */
+export function errKunci_(b, me) {
+  return new AppError(me && me.r === 'admin'
+    ? 'Bank soal ini sedang dikunci. Buka kuncinya dulu di halaman Bank soal.'
+    : 'Bank soal ini sedang dikunci oleh ' + (b.dikunciOleh || 'admin') + ', jadi tidak bisa diubah atau dihapus. Minta admin membuka kuncinya.', 'KUNCI');
+}
 export function reqAdmin_(me) { reqGuru_(me); if (me.r !== 'admin') throw new AppError('Akses khusus admin'); return me; }
 export function reqSiswa_(me) { if (me.r !== 'siswa') throw new AppError('Akses khusus siswa', 'AUTH'); return me; }
 
@@ -167,7 +173,8 @@ export function bersihkanSoal_(s) {
 }
 
 export function metaBank_(b) {
-  return { id: b.id, judul: b.judul, mapel: b.mapel, tingkat: b.tingkat, guruId: b.guruId, guruNama: b.guruNama, jumlahSoal: b.soal.length, totalBobot: b.soal.reduce((a, s) => a + (Number(s.bobot) || 0), 0), dibuat: b.dibuat, diubah: b.diubah };
+  return { id: b.id, judul: b.judul, mapel: b.mapel, tingkat: b.tingkat, guruId: b.guruId, guruNama: b.guruNama, jumlahSoal: b.soal.length, totalBobot: b.soal.reduce((a, s) => a + (Number(s.bobot) || 0), 0), dibuat: b.dibuat, diubah: b.diubah,
+    terkunci: !!b.terkunci, dikunciOleh: b.terkunci ? (b.dikunciOleh || '') : '', dikunciPada: b.terkunci ? (Number(b.dikunciPada) || 0) : 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +190,7 @@ export function ringkasUjian_(u) {
   return {
     id: u.id, nama: u.nama, bankId: u.bankId, bankJudul: u.bankJudul, mapel: u.mapel, tingkat: u.tingkat,
     guruId: u.guruId, guruNama: u.guruNama, kelas: u.kelas, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi,
-    acakSoal: u.acakSoal, acakOpsi: u.acakOpsi, tampilNilai: u.tampilNilai, pakaiToken: u.pakaiToken, wajibApp: !!u.wajibApp,
+    acakSoal: u.acakSoal, acakOpsi: u.acakOpsi, tampilNilai: u.tampilNilai, pakaiToken: u.pakaiToken, wajibApp: !!u.wajibApp, semuaGuru: !!u.semuaGuru,
     token: u.token, maxPelanggaran: u.maxPelanggaran, aktif: u.aktif, keterangan: u.keterangan,
     jumlahSoal: u.jumlahSoal, status: statusJadwal_(u, now()), diubah: u.diubah
   };
@@ -346,7 +353,7 @@ export function tebakTingkat_(namaKelas, tingkatList) {
 }
 export const publikGuru_ = g => ({ id: g.id, username: g.username, nama: g.nama, role: g.role, aktif: g.aktif !== false, mapel: g.mapel || [] });
 
-export const CONFIG_DEFAULT = { namaSekolah: 'Sekolah', tahunAjaran: '', semester: '', logo: '', tingkat: ['X', 'XI', 'XII'], kelas: [], mapel: [] };
+export const CONFIG_DEFAULT = { namaSekolah: 'Sekolah', tahunAjaran: '', semester: '', logo: '', tingkat: ['X', 'XI', 'XII'], kelas: [], mapel: [], minKirimMenit: 1 };
 
 export function bankContoh_() {
   const t = Date.now();

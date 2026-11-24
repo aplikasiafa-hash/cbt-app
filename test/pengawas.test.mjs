@@ -17,7 +17,7 @@ const ADM = (await call('loginGuru', { username: 'admin', password: 'admin123' }
 const admin = (await call('profilSaya', {}, ADM)).data;
 
 console.log('Versi');
-ok('versi 2.10.0-CBT', (await call('ping')).data.versi === '2.10.0-CBT');
+ok('versi 2.10.0-CBT', (await call('ping')).data.versi === '2.17.0-CBT');
 
 console.log('Impor guru dari Excel');
 let r = await call('importGuru', { rows: [
@@ -66,7 +66,7 @@ console.log('Jadwal guru = ujian hari ini');
 r = await call('listUjian', { untuk: 'jadwal' }, GA);
 const namaJ = r.data.map(u => u.nama);
 ok('guru melihat semua ujian hari ini, tanpa jadwal hari lain', namaJ.includes('PAS Kimia X') && namaJ.includes('Ujian lain hari ini') && !namaJ.includes('Besok'), namaJ);
-ok('token hanya untuk ujian yang ia awasi', r.data.find(u => u.id === U.id).token === U.token && r.data.find(u => u.id === Ulain.id).token === '', r.data.map(u => [u.nama, u.token]));
+ok('daftar jadwal tidak memuat token per jadwal (token satu untuk semua ujian)', r.data.every(u => !u.token), r.data.map(u => [u.nama, u.token]));
 ok('kelas yang ia awasi ditandai', r.data.find(u => u.id === U.id).awasi.join() === 'X-1', r.data.find(u => u.id === U.id));
 
 console.log('Monitoring = kelas yang diawasi (bukan mapel)');
@@ -99,8 +99,11 @@ ok('perubahan status yang dikirim ke A hanya siswa X-1', diff && diff.rows.lengt
 r = await call('paksaSelesai', { ujianId: U.id, nis: '7003' }, GA); ok('A tidak bisa menghentikan siswa X-2', !r.ok && /kelas yang Anda awasi/.test(r.error), r);
 r = await call('resetLogin', { ujianId: U.id, nis: '7001' }, GA); ok('A bisa reset login siswa X-1', r.ok, r);
 r = await call('paksaSelesai', { ujianId: U.id, nis: '7003' }, GB); ok('B bisa menghentikan siswa X-2', r.ok, r);
-r = await call('gantiTokenUjian', { id: U.id }, GA); ok('pengawas bisa mengganti token', r.ok && r.data.length === 6, r);
-r = await call('gantiTokenUjian', { id: U.id }, GP); ok('pemilik soal (bukan pengawas) tidak bisa mengganti token', !r.ok, r);
+r = await call('aturTokenUjian', { mode: 'manual', nilai: 'XYZ9' }, GA); ok('pengawas tidak bisa membuat token (hanya admin)', !r.ok, r);
+r = await call('aturTokenUjian', { mode: 'manual', nilai: 'XYZ9' }, ADM); ok('admin membuat token', r.ok && r.data.nilai === 'XYZ9', r);
+r = await call('tokenUjian', {}, GA); ok('pengawas melihat token', r.ok && r.data.nilai === 'XYZ9', r);
+r = await call('tokenUjian', {}, GP); ok('pemilik soal (bukan pengawas) tidak melihat nilai token', r.ok && !r.data.nilai && r.data.bukanPengawas, r);
+await call('aturTokenUjian', { mode: 'mati' }, ADM);
 
 console.log('Admin mengubah pengawas saat monitor terbuka');
 r = await call('saveUjian', { ...U, pengawas: [{ id: gB.id, kelas: [] }] }, ADM);
@@ -129,6 +132,22 @@ r = await call('dashboard', {}, GB);
 ok('beranda B: jumlah tugas mengawas & ujian yang diawasi', r.data.jumlahAwas === 2 && r.data.mendatang.map(u => u.nama).sort().join() === 'PAS Kimia X,Ujian lain hari ini', r.data);
 r = await call('dashboard', {}, GP);
 ok('beranda pemilik: jadwal dari bank soalnya tetap terhitung', r.data.jumlahUjian >= 3 && r.data.mendatang.length === 0, r.data);
+
+console.log('Semua guru memantau');
+r = await call('saveUjian', { nama: 'Ujian semua guru', bankId: bank.id, kelas: ['X-1', 'X-2'], mulai: t0 - 60000, selesai: t0 + 3600000, durasi: 30,
+  semuaGuru: true, pengawas: [{ id: gA.id, kelas: ['X-1'] }] }, ADM);
+const USG = r.data;
+ok('jadwal "Semua guru" tersimpan, daftar pengawas dikosongkan', r.ok && USG.semuaGuru === true && USG.pengawas.length === 0, r);
+r = await call('listUjian', { untuk: 'monitor' }, GP);
+ok('guru yang tidak ditugaskan melihat ujian itu di Monitoring', r.ok && r.data.some(u => u.id === USG.id && u.awasi.join() === 'X-1,X-2'), r.data && r.data.map(u => [u.nama, u.awasi]));
+r = await call('monitorUjian', { ujianId: USG.id }, GP);
+ok('guru itu bisa memantau semua kelas peserta', r.ok && r.data.peserta.some(p => p.kelas === 'X-2') && r.data.peserta.some(p => p.kelas === 'X-1'), r.data && r.data.peserta);
+await call('aturTokenUjian', { mode: 'manual', nilai: 'SG01' }, ADM);
+r = await call('tokenUjian', {}, GP); ok('semua guru melihat token', r.ok && r.data.nilai === 'SG01', r);
+await call('aturTokenUjian', { mode: 'mati' }, ADM);
+r = await call('saveUjian', { ...USG, semuaGuru: false, pengawas: [{ id: gB.id, kelas: [] }] }, ADM);
+ok('dimatikan lagi → hanya pengawas terpilih', r.ok && !r.data.semuaGuru && r.data.pengawas.length === 1 && !(await call('monitorUjian', { ujianId: USG.id }, GP)).ok, r);
+await call('deleteUjian', { id: USG.id, paksa: true, hapusHasil: true }, ADM);
 
 await call('deleteUjian', { id: Ubesok.id, paksa: true, hapusHasil: true }, ADM);
 console.log(fails ? `\n${fails} GAGAL` : '\nSEMUA LULUS');

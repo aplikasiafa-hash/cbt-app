@@ -146,7 +146,8 @@ Cek di aplikasi guru → **Pengaturan** → bagian *Sistem & cadangan*: repo dan
 3. **Data guru**: buat akun guru. Hapus akun contoh `guru`.
 4. **Data siswa → Impor**: Excel dengan kolom **NIS, Nama, Kelas** (opsional **Kata sandi**; bawaan = NIS). Hapus siswa contoh 1001–1003.
 5. Guru membuat **Bank soal**; admin membuat **Jadwal ujian**.
-6. Hari ujian: pengawas membuka **Monitoring** (tanda **● Status diperbarui otomatis** = tersambung), bacakan **token**.
+6. Hari ujian: admin menyalakan **Token ujian** (Beranda atau Jadwal ujian → **Manual** atau **Otomatis**; satu token untuk semua ujian).
+   Pengawas membuka **Monitoring** (tanda **● Status diperbarui otomatis** = tersambung), tekan **↻ Muat ulang** untuk melihat token terbaru, lalu bacakan.
 
 ### Sudah punya data di versi Apps Script?
 Isi `DATA_REPO` dengan repo data lama (mis. `namaakun/cbt-data`) dan pastikan token punya akses ke repo itu,
@@ -163,7 +164,7 @@ bank soal, jadwal, dan hasil ujian ikut pindah. Lakukan saat tidak ada ujian ber
 | Mata pelajaran bank soal baru | semua | — | hanya mapel yang ditetapkan admin di akunnya | — |
 | Jadwal ujian yang terlihat | semua (atur jadwal, kelas, **pengawas**) | **hanya hari ini**: Ujian, Kelas, Waktu, Durasi, Pengawas | sama dengan pengawas | **hanya hari ini** |
 | Monitoring (daftar) | **hanya ujian yang sedang berlangsung**, semua kelas (ujian lain lewat Jadwal → Pantau) | **hanya ujian berlangsung yang ia awasi, hanya kelas yang ia awasi** | hanya bila ia juga pengawas | — |
-| Token ujian | lihat & ganti | lihat & ganti (ujian yang ia awasi) | — | — |
+| Token ujian (satu untuk semua ujian) | buat: Mati / Manual / Otomatis | lihat + ↻ Muat ulang (bila mengawasi ujian hari ini) | — | — |
 | Hasil: nilai, skor, ringkasan & KKM, analisis soal, koreksi, hitung ulang | **tidak** (hanya daftar peserta & status) | — | ya | nilai sendiri bila "Tampilkan nilai" aktif |
 | Excel & impor: data siswa, data guru, **pengaturan** | ya | — | — | — |
 

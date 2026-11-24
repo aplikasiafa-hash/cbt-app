@@ -15,6 +15,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as X from './shared.js';
 import { siapkanD1, potong, SKEMA_VERSI } from './db.js';
 import { unggahGambar, cekRepoData, commitFiles, unduhRepo, bacaBerkas } from './github.js';
+import { pemakaianHarian } from './pemakaian.js';
 
 const { AppError, now, str_, num_, bool_, parse_, uid_, GRACE_MS } = X;
 
@@ -23,8 +24,17 @@ const JW_FLUSH_MS = 120000;    // cadangkan jawaban sementara tiap 2 menit
 const DENYUT_MS = 4000;        // dorong perubahan status ke monitor tiap 4 detik
 const PENDING_MS = 2 * 3600000; // jawaban perangkat tak kunjung datang: dinilai dari cadangan server 2 jam setelah jadwal ditutup
 const ALARM_MS = 60000;        // perawatan saat tidak ada koneksi
-const JEDA_CADANGAN_MS = 2 * 60000;   // serverB: dikirim ±2 menit setelah perubahan terakhir (hanya bila ada perubahan)
+const JEDA_CADANGAN_MS = 2 * 60000;   // hanya untuk uji (JEDA_CADANGAN_DETIK); biasanya cadangan serverB dikirim pukul 00.00 WITA bila ada perubahan
 const GAGAL_TUNDA_MS = 3600000;        // kiriman gagal (mis. token salah) dicoba lagi 1 jam kemudian
+const WITA_MS = 8 * 3600000;           // perawatan & cadangan harian pukul 00.00 WITA (= 16.00 UTC)
+// Mesin ujian hanya menyala (memakai durasi) selama ada koneksi terbuka. Koneksi hanya dipakai siswa yang SEDANG
+// mengerjakan dan Monitoring yang memantau mereka. Guru/admin memakai permintaan biasa (tidak menahan mesin ujian).
+const DIAM_MS = 60000;                 // koneksi yang tidak terikat sesi ujian/monitor & menganggur 1 menit → ditutup
+const SEPI_MS = 15000;                 // ujian tanpa siswa yang sedang mengerjakan selama 15 detik → Monitoring beralih ke cek berkala
+const ABJAD_TOKEN = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // tanpa O/0/I/1 agar tidak tertukar saat dibacakan
+const TENGGANG_TOKEN_MS = 2 * 60000;   // token otomatis sebelumnya masih diterima 2 menit setelah berganti
+/** Pukul 00.00 WITA berikutnya setelah waktu t. */
+const tengahMalamWITA = t => (Math.floor((t + WITA_MS) / 86400000) + 1) * 86400000 - WITA_MS;
 // Salinan data guru/bank/jadwal/pengaturan di penyimpanan internal Durable Object: saat mesin ujian bangun dari tidur
 // tidak perlu membaca D1 (hemat "Rows read"). Dimuat ulang dari D1 sekali setiap versi aplikasi baru.
 const CACHE_VERSI = 'c1:' + X.VERSI + ':' + SKEMA_VERSI;   // versi/skema baru → siapkan D1 (migrasi) & muat ulang sekali
@@ -149,7 +159,7 @@ export class Engine extends DurableObject {
   muatDariDO() {
     const baca = t => [...this.sql.exec(`SELECT id, d FROM ${t}`)].map(r => [r.id, JSON.parse(r.d)]);
     this.secret = this.metaGet('c_secret');
-    this._config = parse_(this.metaGet('c_config'), null) || { ...X.CONFIG_DEFAULT };
+    this._config = { ...X.CONFIG_DEFAULT, ...(parse_(this.metaGet('c_config'), null) || {}) };
     this.guru = new PetaDO(this.sql, 'c_guru', baca('c_guru'));
     this.bankIdx = new PetaDO(this.sql, 'c_bank', baca('c_bank'));
     this.ujian = new PetaDO(this.sql, 'c_ujian', baca('c_ujian'));
@@ -166,7 +176,7 @@ export class Engine extends DurableObject {
       DB.prepare(`SELECT meta FROM bank`),
       DB.prepare(`SELECT data FROM ujian`)
     ]);
-    this.config = c.results[0] ? JSON.parse(c.results[0].v) : { ...X.CONFIG_DEFAULT };
+    this.config = { ...X.CONFIG_DEFAULT, ...(c.results[0] ? JSON.parse(c.results[0].v) : {}) };
     this.guru = new PetaDO(this.sql, 'c_guru', g.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
     this.bankIdx = new PetaDO(this.sql, 'c_bank', b.results.map(r => { const x = JSON.parse(r.meta); return [x.id, x]; }));
     this.ujian = new PetaDO(this.sql, 'c_ujian', u.results.map(r => { const x = JSON.parse(r.data); return [x.id, x]; }));
@@ -177,6 +187,61 @@ export class Engine extends DurableObject {
   }
   metaGet(k) { const r = [...this.sql.exec(`SELECT v FROM meta WHERE k = ?`, k)]; return r.length ? r[0].v : null; }
   metaSet(k, v) { this.sql.exec(`INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)`, k, String(v)); }
+
+  // ==========================================================================
+  //  TOKEN UJIAN — satu token untuk semua ujian, hanya admin yang membuat
+  //  mode: 'mati' | 'manual' (nilai tetap) | 'otomatis' (berganti tiap N menit, dihitung dari waktu → tanpa alarm,
+  //  mesin ujian tidak perlu bangun untuk mengganti token). Otomatis berhenti sendiri bila semua ujian hari ini
+  //  sudah ditutup dan tidak ada siswa yang masih mengerjakan.
+  // ==========================================================================
+  get aturToken() { if (!this._tok) this._tok = parse_(this.metaGet('tokenUjian'), null) || { mode: 'mati' }; return this._tok; }
+  simpanAturToken(v) { this._tok = v; this.metaSet('tokenUjian', JSON.stringify(v)); }
+  /** Masih ada ujian hari ini yang belum ditutup, atau siswa yang masih mengerjakan. */
+  masihAdaUjian(t) {
+    if (this.adaPeserta()) return true;
+    for (const u of this.ujian.values()) if (u.aktif && X.ujianHariIni_(u, t) && t <= u.selesai + GRACE_MS) return true;
+    return false;
+  }
+  async kodeToken(t0, i) {
+    const k = t0 + ':' + i, c = this._kodeTok || (this._kodeTok = new Map());
+    if (c.has(k)) return c.get(k);
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(this.secret + ':token-ujian'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const b = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(k)));
+    let s = ''; for (let j = 0; j < 6; j++) s += ABJAD_TOKEN[b[j] % ABJAD_TOKEN.length];
+    if (c.size > 8) c.delete(c.keys().next().value);
+    c.set(k, s);
+    return s;
+  }
+  /** Token yang berlaku sekarang (null = ujian tidak memakai token). */
+  async tokenSekarang(t = now()) {
+    const a = this.aturToken;
+    if (a.mode === 'manual' && a.nilai) return { mode: 'manual', nilai: a.nilai, diubah: a.diubah || 0 };
+    if (a.mode !== 'otomatis') return null;
+    if (!this.masihAdaUjian(t)) {   // semua siswa sudah keluar dari ujian → token otomatis berhenti
+      this.simpanAturToken({ mode: 'mati', menit: a.menit, berhenti: t });
+      return null;
+    }
+    const p = a.menit * 60000, i = Math.max(0, Math.floor((t - a.t0) / p)), awal = a.t0 + i * p;
+    return {
+      mode: 'otomatis', menit: a.menit, nilai: await this.kodeToken(a.t0, i), berikutnya: awal + p, diubah: a.diubah || 0,
+      sebelumnya: i > 0 && t - awal < TENGGANG_TOKEN_MS ? await this.kodeToken(a.t0, i - 1) : ''
+    };
+  }
+  /** Lihat token: admin, atau guru yang menjadi pengawas ujian hari ini. */
+  bolehLihatToken(me, t) {
+    if (me.r === 'admin') return true;
+    for (const u of this.ujian.values()) if (u.aktif && X.ujianHariIni_(u, t) && this.kelasAwas(me, u).size) return true;
+    return false;
+  }
+  minKirimMenit() { return Math.min(30, Math.max(1, Math.round(Number(this.config.minKirimMenit) || 1))); }
+  minKirimMs() {
+    // uji lokal (DEV_MODE): MIN_KIRIM_DETIK detik (bawaan 0) supaya uji otomatis bisa langsung mengirim
+    if (this.env.DEV_MODE === '1') return Math.max(0, Number(this.env.MIN_KIRIM_DETIK) || 0) * 1000;
+    return this.minKirimMenit() * 60000;
+  }
+  /** Sejak kapan siswa boleh menekan Kirim jawaban (tidak lewat dari batas waktunya sendiri). */
+  kirimSetelah(P) { return Math.min((P.mulai || 0) + this.minKirimMs(), P.deadline || Infinity); }
 
   /** Kunci sederhana untuk operasi tulis guru/admin (read-modify-write ke D1). */
   kunci(fn) { const run = this.antri.then(() => fn()); this.antri = run.catch(() => {}); return run; }
@@ -222,6 +287,8 @@ export class Engine extends DurableObject {
     let at = this.adaKerja() ? t + ALARM_MS : 0;
     const b = this.waktuCadangan();
     if (b && (!at || b < at)) at = Math.max(b, t + 10000);
+    // sesi ujian yang sudah selesai masih ada di penyimpanan internal → dibereskan pada perawatan pukul 00.00 WITA
+    if (!at && this.L.size) at = tengahMalamWITA(t);
     if (!at) return;
     if (this.alarmAt && this.alarmAt > t && this.alarmAt <= at + 5000) return;
     this.alarmAt = at;
@@ -229,13 +296,14 @@ export class Engine extends DurableObject {
   }
   pasangAlarm() { return this.aturAlarm(); }
   adaPeserta() { for (const L of this.L.values()) for (const P of L.P.values()) if (P.status === 'mengerjakan') return true; return false; }
-  /** Kapan data dikirim ke serverB: hanya bila ada perubahan, ±2 menit setelah perubahan terakhir.
+  /** Kapan data dikirim ke serverB: hanya bila ada perubahan, pada perawatan harian pukul 00.00 WITA
+   *  (bila JEDA_CADANGAN_DETIK diisi: sekian detik setelah perubahan terakhir — dipakai untuk uji).
    *  Ditunda selama ada siswa yang sedang mengerjakan (dikirim setelah ujian selesai). 0 = tidak perlu. */
   waktuCadangan() {
     if (!this.ghSiap() || !this.bdirty || !this.bdirty.size) return 0;
     if (this.adaPeserta()) return 0;
-    const jeda = Number(this.env.JEDA_CADANGAN_DETIK) > 0 ? Number(this.env.JEDA_CADANGAN_DETIK) * 1000 : JEDA_CADANGAN_MS;
-    let at = Math.max((this.bubah || 0) + jeda, this.lastBackup + Math.min(60000, jeda));
+    const uji = Number(this.env.JEDA_CADANGAN_DETIK) > 0, jeda = uji ? Number(this.env.JEDA_CADANGAN_DETIK) * 1000 : JEDA_CADANGAN_MS;
+    let at = uji ? Math.max((this.bubah || 0) + jeda, this.lastBackup + Math.min(60000, jeda)) : tengahMalamWITA(this.bubah || Date.now());
     if (this.cadanganGagal) at = Math.max(at, this.cadanganGagal.t + GAGAL_TUNDA_MS);
     return at;
   }
@@ -253,8 +321,9 @@ export class Engine extends DurableObject {
   ujianWajib(id) { const u = this.ujian.get(str_(id)); if (!u) throw new AppError('Ujian tidak ditemukan'); return u; }
   ringkas(u) {
     const r = X.ringkasUjian_(u); const b = this.bankIdx.get(u.bankId); if (b) r.jumlahSoal = b.jumlahSoal;
+    r.token = ''; r.pakaiToken = false;   // token per jadwal tidak dipakai lagi: satu token global (A.tokenUjian)
     // nama pengawas diambil dari data guru terbaru (bila guru mengganti nama, jadwal ikut berubah)
-    r.pengawas = (u.pengawas || []).map(p => ({ p, g: this.guru.get(p.id) })).filter(x => !x.g || x.g.role !== 'admin')
+    r.pengawas = (u.semuaGuru ? [] : u.pengawas || []).map(p => ({ p, g: this.guru.get(p.id) })).filter(x => !x.g || x.g.role !== 'admin')
       .map(({ p, g }) => ({ id: p.id, nama: g ? g.nama : (p.nama || '(akun dihapus)'), kelas: p.kelas || [] }));
     return r;
   }
@@ -264,12 +333,12 @@ export class Engine extends DurableObject {
     if (me.r === 'admin') return r;
     const k = this.kelasAwas(me, u);
     r.awasi = u.kelas.filter(x => k.has(x)); r.pemilik = u.guruId === me.id;
-    if (!k.size) r.token = '';
     return r;
   }
   /** Kelas yang diawasi akun ini pada ujian u: null = semua (admin), Set kosong = bukan pengawas. */
   kelasAwas(me, u) {
     if (me.r === 'admin') return null;
+    if (u.semuaGuru) return new Set(u.kelas);   // "Semua guru": setiap guru boleh memantau semua kelas peserta
     const s = new Set();
     for (const p of u.pengawas || []) {
       if (p.id !== me.id) continue;
@@ -531,7 +600,11 @@ export class Engine extends DurableObject {
     let P = L.P.get(me.id);
     if (P && P.status === 'selesai') throw new AppError('Anda sudah menyelesaikan ujian ini', 'SELESAI');
     if (t > u.selesai && !(P && P.status === 'mengerjakan')) throw new AppError('Waktu ujian sudah ditutup');
-    if (u.pakaiToken && str_(d.token).trim().toUpperCase() !== String(u.token).toUpperCase()) throw new AppError('Token ujian salah', 'TOKEN');
+    const lama = L.P.get(me.id);
+    if (!(lama && lama.status === 'mengerjakan')) {   // melanjutkan ujian (muat ulang / sambung lagi) tidak perlu token
+      const tk = await this.tokenSekarang(t), masuk = str_(d.token).trim().toUpperCase();
+      if (tk && masuk !== tk.nilai && !(tk.sebelumnya && masuk === tk.sebelumnya)) throw new AppError(masuk ? 'Token ujian salah' : 'Masukkan token ujian yang dibacakan pengawas', 'TOKEN');
+    }
     if (u.wajibApp && !str_(d.app, 20)) throw new AppError('Ujian ini wajib dikerjakan lewat aplikasi CBT Ujian (Android/Windows). Minta aplikasinya kepada pengawas.', 'WAJIB_APP');
     const bank = await this.getBank(u.bankId);
     if (!bank) throw new AppError('Bank soal ujian tidak ditemukan. Hubungi admin.');
@@ -559,7 +632,7 @@ export class Engine extends DurableObject {
     return {
       ujian: { id: u.id, nama: u.nama, mapel: u.mapel, durasi: u.durasi, maxPelanggaran: u.maxPelanggaran, tampilNilai: u.tampilNilai, keterangan: u.keterangan },
       soal: X.soalUntukSiswa_(u, bank, me.id, P.percobaan),
-      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran
+      mulai: P.mulai, deadline: P.deadline, jawaban: P.jawaban, pelanggaran: P.pelanggaran, kirimSetelah: this.kirimSetelah(P)
     };
   }
 
@@ -598,6 +671,11 @@ export class Engine extends DurableObject {
       if (!bank) throw new AppError('Bank soal ujian tidak ditemukan. Hubungi admin.');
       if (P.status !== 'mengerjakan' && !susulan()) return this.infoSelesai(P, u);
       const t = now();
+      // tombol "Kirim jawaban" (tanpa alasan) baru boleh setelah N menit; waktu habis / batas pelanggaran / darurat tetap boleh
+      if (P.status === 'mengerjakan' && !str_(d.alasan).trim() && t < this.kirimSetelah(P) - 5000) {
+        const sisa = Math.ceil((this.kirimSetelah(P) - t) / 60000);
+        throw new AppError('Ujian baru bisa diselesaikan ' + this.minKirimMenit() + ' menit setelah dimulai. Tunggu ±' + sisa + ' menit lagi.', 'BELUM_WAKTU');
+      }
       P.jawaban = X.bersihJawaban_(d.jawaban);
       P.pelanggaran = Math.max(P.pelanggaran || 0, Math.round(num_(d.pelanggaran, 0)));
       P.terjawab = X.hitungTerjawab_(P.jawaban); P.ragu = (P.jawaban.r || []).length;
@@ -692,11 +770,17 @@ export class Engine extends DurableObject {
       inf.s = null;
     }
   }
-  /** Ujian selesai / direset / pindah perangkat: soket tunggal cukup dilepas, soket lama ditutup. */
+  /** Ujian selesai / direset / pindah perangkat: ikatan dilepas lalu koneksi ditutup (pesan terakhir sempat terkirim),
+   *  supaya mesin ujian bisa tidur walau halaman siswa/guru tetap terbuka. */
   akhiriIkatan(ws, kode, alasan, jeda) {
-    if (ws.info && ws.info.rpc) return this.lepasIkatan(ws);
+    this.lepasIkatan(ws);
     const tutup = () => { try { ws.close(kode || 1000, alasan || ''); } catch (e) {} };
-    if (jeda) setTimeout(tutup, jeda); else tutup();
+    setTimeout(tutup, jeda || 1000);
+  }
+  /** Ada siswa yang benar-benar sedang mengerjakan (belum lewat batas waktunya) di ujian ini. */
+  adaYangMengerjakan(L, t) {
+    for (const P of L.P.values()) if (P.status === 'mengerjakan' && t <= (P.deadline || 0) + GRACE_MS) return true;
+    return false;
   }
   async pesan(ws, data) {
     await ws.siap;
@@ -791,15 +875,22 @@ export class Engine extends DurableObject {
         if (rows.length) kirim(ws, { t: 'diff', rows, now: t });
       }
     }
+    // Siswa terakhir selesai → Monitoring ujian itu ditutup (beralih ke cek berkala) → tanpa koneksi, mesin ujian tidur.
+    const skrg = Date.now();
+    for (const L of this.L.values()) {
+      if (!L.mons.size) { L.sepiSejak = 0; continue; }
+      if (this.adaYangMengerjakan(L, t)) { L.sepiSejak = 0; continue; }
+      if (!L.sepiSejak) L.sepiSejak = skrg;
+      if (skrg - L.sepiSejak < SEPI_MS) continue;
+      for (const ws of [...L.mons]) { kirim(ws, { t: 'sepi', now: t }); this.akhiriIkatan(ws, 1000, 'sepi', 500); }
+    }
     if (this.ketukan % 10 === 0) {         // ±40 detik: jaga koneksi tetap hidup + sinkron jam
-      const msg = JSON.stringify({ t: 'tik', now: t }), skrg = Date.now();
+      const msg = JSON.stringify({ t: 'tik', now: t });
       for (const ws of [...this.sockets]) {
         try { ws.send(msg); } catch (e) {}
-        const inf = ws.info; if (!inf) continue;
-        const diam = skrg - (inf.last || inf.t0);
-        // soket yang lama tidak dipakai ditutup; aplikasi menyambung lagi saat dibutuhkan
-        const tutup = inf.rpc ? ((!inf.s && !inf.m && diam > 3 * 3600000) || (inf.m && diam > 6 * 3600000)) : (inf.m && skrg - inf.t0 > 4 * 3600000);
-        if (tutup) try { ws.close(1000, 'diam'); } catch (e) {}
+        const inf = ws.info; if (!inf || inf.s || inf.m) continue;
+        // koneksi lepas (halaman lama yang memakai koneksi untuk permintaan biasa, siswa yang sudah selesai) → tutup
+        if (skrg - (inf.last || inf.t0) > DIAM_MS) try { ws.close(1000, 'diam'); } catch (e) {}
       }
     }
     if (this.ketukan % 8 === 0) this.rawat().catch(e => console.error('rawat', e && e.stack || e));
@@ -980,6 +1071,14 @@ A.loginSiswa = async function (d) {
   cekGagal(this, k);
   const sw = await this.env.DB.prepare(`SELECT nis, nama, kelas, salt, hash FROM siswa WHERE nis = ?`).bind(nis).first();
   if (!sw || !(await X.cekPw_(sw, d.password))) { catatGagal(this, k); throw new AppError('NIS atau kata sandi salah'); }
+  // sedang mengerjakan ujian di perangkat lain → tidak bisa masuk sampai ujian itu selesai (atau direset pengawas)
+  const perangkat = str_(d.perangkat, 60), t = now();
+  const buka = [...this.ujian.values()].filter(u => u.aktif && (u.kelas || []).indexOf(sw.kelas) >= 0 && t >= u.mulai && t <= u.selesai + GRACE_MS);
+  for (const u of buka) {
+    const L = await this.getL(u.id), P = L.P.get(String(sw.nis));
+    if (P && P.status === 'mengerjakan' && t <= (P.deadline || 0) + GRACE_MS && P.perangkat && P.perangkat !== perangkat)
+      throw new AppError('Akun ini sedang dipakai mengerjakan ujian di perangkat lain. Masuk di perangkat ini baru bisa setelah ujian itu selesai, atau minta pengawas melakukan "Reset login".', 'PERANGKAT');
+  }
   const token = await X.signToken_({ r: 'siswa', id: String(sw.nis), n: sw.nama, k: sw.kelas, exp: now() + X.TOKEN_SISWA_JAM * 3600000 }, this.secret);
   return { token, user: { nis: String(sw.nis), nama: sw.nama, kelas: sw.kelas }, sekolah: { namaSekolah: this.config.namaSekolah, logo: this.config.logo || '' } };
 };
@@ -996,6 +1095,7 @@ A.loginGuru = async function (d) {
 A.ujianSaya = async function (d, me) {
   X.reqSiswa_(me);
   const t = now();
+  const pakaiToken = !!(await this.tokenSekarang(t));
   const list = [...this.ujian.values()]
     .filter(u => u.aktif && (u.kelas || []).indexOf(me.k) >= 0 && X.ujianHariIni_(u, t))   // hanya jadwal hari ini
     .sort((a, b) => a.mulai - b.mulai);
@@ -1014,7 +1114,7 @@ A.ujianSaya = async function (d, me) {
     const h = st[u.id], b = this.bankIdx.get(u.bankId);
     const item = {
       id: u.id, nama: u.nama, mapel: u.mapel, mulai: u.mulai, selesai: u.selesai, durasi: u.durasi, wajibApp: !!u.wajibApp,
-      jumlahSoal: b ? b.jumlahSoal : u.jumlahSoal, pakaiToken: u.pakaiToken, keterangan: u.keterangan,
+      jumlahSoal: b ? b.jumlahSoal : u.jumlahSoal, pakaiToken, keterangan: u.keterangan,
       jadwal: t < u.mulai ? 'akan' : t > u.selesai ? 'selesai' : 'berlangsung', status: h ? h.status : 'belum'
     };
     if (h && h.status === 'selesai' && u.tampilNilai) { item.nilai = h.nilai; item.perluKoreksi = h.perlu; }
@@ -1055,13 +1155,30 @@ A.saveConfig = async function (d, me) {
     tahunAjaran: str_(d.tahunAjaran, 20), semester: str_(d.semester, 20), logo: str_(d.logo, 500),
     tingkat: (d.tingkat || []).map(x => str_(x, 20).trim()).filter(Boolean),
     kelas: (d.kelas || []).map(k => ({ nama: str_(k.nama, 40).trim(), tingkat: str_(k.tingkat, 20).trim() })).filter(k => k.nama),
-    mapel: (d.mapel || []).map(x => str_(x, 80).trim()).filter(Boolean)
+    mapel: (d.mapel || []).map(x => str_(x, 80).trim()).filter(Boolean),
+    minKirimMenit: this.minKirimMenit()   // diatur terpisah (A.waktuSelesai) supaya tidak tertimpa isian lama
   };
   await this.kunci(async () => {
     await this.env.DB.prepare(`INSERT OR REPLACE INTO kv (k, v) VALUES ('config', ?)`).bind(JSON.stringify(cfg)).run();
     this.config = cfg; this.tandaiCadangan('config');
   });
   return cfg;
+};
+
+/** Admin: berapa menit setelah mulai mengerjakan siswa baru bisa menekan Selesai (1–30). Guru hanya membaca. */
+A.waktuSelesai = async function (d, me) {
+  X.reqGuru_(me);
+  if (d && d.menit !== undefined) {
+    X.reqAdmin_(me);
+    const menit = Math.round(num_(d.menit, 0));
+    if (!(menit >= 1 && menit <= 30)) throw new AppError('Isi 1–30 menit');
+    await this.kunci(async () => {
+      const cfg = { ...this.config, minKirimMenit: menit };
+      await this.env.DB.prepare(`INSERT OR REPLACE INTO kv (k, v) VALUES ('config', ?)`).bind(JSON.stringify(cfg)).run();
+      this.config = cfg; this.tandaiCadangan('config');
+    });
+  }
+  return { menit: this.minKirimMenit() };
 };
 
 A.dashboard = async function (d, me) {
@@ -1126,6 +1243,7 @@ A.saveBank = async function (d, me) {
     if (!isBaru && !lama) throw new AppError('Bank soal tidak ditemukan');
     if (lama) this.bolehBank(me, lama);
     if (lama && lama.guruId !== me.id) throw new AppError('Bank soal milik ' + (lama.guruNama || 'guru') + ' tidak bisa diubah oleh admin.');
+    if (lama && lama.terkunci) throw X.errKunci_(lama, me);
     let mapel = str_(input.mapel, 80);
     if (me.r !== 'admin') {
       // guru hanya boleh memakai mata pelajaran yang ditetapkan admin di akunnya
@@ -1169,12 +1287,44 @@ A.deleteBank = async function (d, me) {
     if (!b) throw new AppError('Bank soal tidak ditemukan');
     this.bolehBank(me, b);
     if (b.guruId !== me.id) throw new AppError('Bank soal milik ' + (b.guruNama || 'guru') + ' tidak bisa dihapus oleh admin.');
+    if (b.terkunci) throw X.errKunci_(b, me);
     const dipakai = [...this.ujian.values()].filter(u => u.bankId === id);
     if (dipakai.length) throw new AppError('Bank soal dipakai di jadwal: ' + dipakai.map(u => u.nama).join(', ') + '. Hapus jadwalnya dulu.');
     await this.env.DB.prepare(`DELETE FROM bank WHERE id = ?`).bind(id).run();
     this.bankFull.delete(id); this.bankIdx.delete(id);
     this.tandaiCadangan('bank:' + id); this.tandaiCadangan('bankidx');
     return true;
+  });
+};
+/**
+ * Admin mengunci / membuka pengeditan bank soal (mis. selama ujian berlangsung).
+ * d.kunci: true = kunci, false = buka. Sasaran: d.ids (daftar id), d.id, atau d.pilih:
+ *   'jadwal' = bank yang dipakai jadwal yang belum berakhir, 'semua' = semua bank.
+ * Bank yang statusnya sudah sesuai tidak ditulis ulang (hemat baris D1). Tanggal "diubah" tidak berubah.
+ */
+A.kunciBank = async function (d, me) {
+  X.reqAdmin_(me);
+  const kunci = d.kunci !== false, t = now();
+  return this.kunci(async () => {
+    let ids;
+    if (d.pilih === 'jadwal') ids = [...new Set([...this.ujian.values()].filter(u => u.bankId && Number(u.selesai) >= t).map(u => u.bankId))];
+    else if (d.pilih === 'semua') ids = [...this.bankIdx.keys()];
+    else ids = [...new Set((Array.isArray(d.ids) ? d.ids : [d.id]).filter(Boolean).map(X.safeId_))];
+    const DB = this.env.DB, st = [], baru = [];
+    for (const id of ids.slice(0, 1000)) {
+      const meta = this.bankIdx.get(id);
+      if (!meta) continue;
+      if (!!meta.terkunci === kunci) continue;
+      const b = await this.getBank(id);
+      if (!b) continue;
+      const b2 = { ...b, terkunci: kunci, dikunciOleh: kunci ? me.n : '', dikunciPada: kunci ? t : 0 };
+      st.push(DB.prepare(`INSERT OR REPLACE INTO bank (id, meta, data) VALUES (?, ?, ?)`).bind(id, JSON.stringify(X.metaBank_(b2)), JSON.stringify(b2)));
+      baru.push(b2);
+    }
+    for (let i = 0; i < st.length; i += 50) await DB.batch(st.slice(i, i + 50));
+    for (const b of baru) { this.bankFull.set(b.id, b); this.bankIdx.set(b.id, X.metaBank_(b)); this.tandaiCadangan('bank:' + b.id); }
+    if (baru.length) this.tandaiCadangan('bankidx');
+    return { diubah: baru.length, ids: baru.map(b => b.id), list: [...this.bankIdx.values()] };
   });
 };
 A.uploadGambar = async function (d, me) {
@@ -1242,7 +1392,8 @@ A.saveUjian = async function (d, me) {
   if (!bank) throw new AppError('Bank soal tidak ditemukan');
   if (!bank.soal.length) throw new AppError('Bank soal masih kosong');
   const tingkatU = str_(d.tingkat, 20) || bank.tingkat;
-  const pengawas = bacaPengawas(this, d, kelas, bank.mapel, tingkatU, d.id ? this.ujian.get(str_(d.id)) : null);
+  const semuaGuru = bool_(d.semuaGuru);   // semua guru memantau semua kelas → daftar pengawas tidak dipakai
+  const pengawas = semuaGuru ? [] : bacaPengawas(this, d, kelas, bank.mapel, tingkatU, d.id ? this.ujian.get(str_(d.id)) : null);
   const u = await this.kunci(async () => {
     const lama = d.id ? this.ujian.get(str_(d.id)) : null;
     if (d.id && !lama) throw new AppError('Jadwal tidak ditemukan');
@@ -1251,9 +1402,9 @@ A.saveUjian = async function (d, me) {
       id: lama ? lama.id : uid_('u'), nama,
       bankId: bank.id, bankJudul: bank.judul, mapel: bank.mapel, tingkat: tingkatU,
       guruId: bank.guruId, guruNama: bank.guruNama, jumlahSoal: bank.soal.length,
-      kelas, mulai, selesai, durasi, pengawas,
-      acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: bool_(d.pakaiToken), wajibApp: bool_(d.wajibApp),
-      token: bool_(d.pakaiToken) ? ((lama && lama.token) || X.buatToken_()) : '',
+      kelas, mulai, selesai, durasi, pengawas, semuaGuru,
+      acakSoal: bool_(d.acakSoal), acakOpsi: bool_(d.acakOpsi), tampilNilai: bool_(d.tampilNilai), pakaiToken: false, wajibApp: bool_(d.wajibApp),
+      token: '',   // token kini satu untuk semua ujian (menu Token ujian, hanya admin)
       maxPelanggaran: Math.max(0, Math.round(num_(d.maxPelanggaran, 0))),
       aktif: d.aktif === undefined ? true : bool_(d.aktif),
       keterangan: str_(d.keterangan, 1000),
@@ -1307,17 +1458,31 @@ A.deleteUjian = async function (d, me) {
     return true;
   });
 };
-A.gantiTokenUjian = async function (d, me) {
+/** Token ujian (satu untuk semua ujian). Admin & pengawas ujian hari ini melihat nilainya; guru lain hanya statusnya. */
+A.tokenUjian = async function (d, me) {
   X.reqGuru_(me);
-  return this.kunci(async () => {
-    const u = this.ujianWajib(d.id);
-    if (me.r !== 'admin' && !this.kelasAwas(me, u).size) throw new AppError('Token hanya bisa diganti admin atau pengawas ujian ini');
-    const u2 = { ...u, token: X.buatToken_(), pakaiToken: true, diubah: now() };
-    await this.env.DB.prepare(`UPDATE ujian SET data = ? WHERE id = ?`).bind(JSON.stringify(u2), u.id).run();
-    this.ujian.set(u.id, u2);
-    this.tandaiCadangan('ujian');
-    return u2.token;
-  });
+  const t = now(), tk = await this.tokenSekarang(t), a = this.aturToken;
+  const res = { mode: tk ? tk.mode : 'mati', menit: tk ? tk.menit || 0 : (a.menit || 0), berikutnya: tk ? tk.berikutnya || 0 : 0, diubah: tk ? tk.diubah : 0, berhenti: a.berhenti || 0, serverTime: t };
+  if (tk && this.bolehLihatToken(me, t)) res.nilai = tk.nilai; else if (tk) res.bukanPengawas = true;
+  return res;
+};
+/** Admin: matikan token, buat token manual (diketik / acak), atau token otomatis yang berganti tiap N menit. */
+A.aturTokenUjian = async function (d, me) {
+  X.reqAdmin_(me);
+  const t = now(), mode = str_(d.mode, 10);
+  if (mode === 'mati') this.simpanAturToken({ mode: 'mati', menit: this.aturToken.menit || 5, diubah: t, oleh: me.n });
+  else if (mode === 'manual') {
+    let nilai = str_(d.nilai, 12).trim().toUpperCase();
+    if (!nilai) nilai = X.buatToken_();
+    if (!/^[A-Z0-9]{4,8}$/.test(nilai)) throw new AppError('Token manual harus 4–8 huruf/angka tanpa spasi');
+    this.simpanAturToken({ mode: 'manual', nilai, menit: this.aturToken.menit || 5, diubah: t, oleh: me.n });
+  } else if (mode === 'otomatis') {
+    const menit = Math.round(num_(d.menit, 0));
+    if (!(menit >= 1 && menit <= 120)) throw new AppError('Token otomatis berganti setiap 1–120 menit');
+    if (!this.masihAdaUjian(t)) throw new AppError('Token otomatis hanya bisa diaktifkan bila ada ujian hari ini yang belum ditutup. Token berhenti sendiri setelah semua siswa keluar dari ujian.');
+    this.simpanAturToken({ mode: 'otomatis', menit, t0: t, diubah: t, oleh: me.n });
+  } else throw new AppError('Mode token tidak dikenal');
+  return A.tokenUjian.call(this, {}, me);
 };
 
 // ---------------------------------------------------------------- siswa (ujian)
@@ -1711,8 +1876,34 @@ A.statusSistem = async function (d, me) {
     versi: X.VERSI, sesiAktif: this.L.size, mengerjakan, siswaOnline, monitor,
     adaB: this.ghSiap(), adaMedia: !!this.env.MEDIA_REPO,
     antrianCadangan: this.bdirty.size, cadanganTerakhir: this.lastBackup || 0, cadanganGagal: this.cadanganGagal || null,
-    ukuranDb: await ukuranD1(this.env.DB), batasDb: 500 * 1024 * 1024
+    ukuranDb: await ukuranD1(this.env.DB), batasDb: 500 * 1024 * 1024,
+    kunciLink: { terpasang: !!this.env.APP_KUNCI, aktif: !!this.env.APP_KUNCI && await kunciLinkAktif(this.env.DB) }
   };
+};
+/** Kunci link: halaman ujian siswa hanya bisa dibuka lewat aplikasi CBT Ujian. Sakelar ini menyalakan/mematikan
+ *  gerbangnya tanpa menghapus rahasia di server. Berlaku di semua server dalam ±30 detik (cache Worker). */
+async function kunciLinkAktif(DB) {
+  try { const r = await DB.prepare(`SELECT v FROM kv WHERE k='kunci_link'`).first(); return !(r && r.v === '0'); } catch (e) { return true; }
+}
+A.aturKunciLink = async function (d, me) {
+  X.reqAdmin_(me);
+  if (!this.env.APP_KUNCI) throw new AppError('Kunci link belum dipasang di serverC.');
+  const aktif = d.aktif !== false;
+  await this.env.DB.prepare(`INSERT OR REPLACE INTO kv (k, v) VALUES ('kunci_link', ?)`).bind(aktif ? '1' : '0').run();
+  return { terpasang: true, aktif };
+};
+/** Pemakaian harian akun serverC (angka dasbor). Tanpa D1. Hasil disimpan 30 detik agar tombol muat ulang
+ *  yang ditekan berkali-kali tidak membebani API serverC. */
+A.pemakaianHarian = async function (d, me) {
+  X.reqAdmin_(me);
+  const c = this._pakai;
+  if (c && now() - c.t < 30000) return { ...c.r, simpanan: true };
+  if (!this._pakaiJalan) {
+    this._pakaiJalan = pemakaianHarian(this.env)
+      .then(r => { if (r.siap) this._pakai = { t: now(), r }; return r; })
+      .finally(() => { this._pakaiJalan = null; });
+  }
+  return this._pakaiJalan;
 };
 /** Ukuran database D1 (byte) dari keterangan kueri; 0 bila tidak tersedia. */
 async function ukuranD1(DB) {
