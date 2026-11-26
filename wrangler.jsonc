@@ -43,14 +43,15 @@
   // Selama ujian, mesin ujian merawat dirinya sendiri; di luar jam ujian ia tidur (tidak memakai kuota).
   "triggers": { "crons": ["0 16 * * *"] },
 
-  // Setelan khusus tiap sekolah TIDAK ditulis di sini, tetapi di dashboard serverC:
-  // Workers & Pages → (Worker sekolah) → Settings → Variables and Secrets → Add
-  //   Text   MEDIA_REPO     akun-github-sekolah/cbt-media   (repo PUBLIK untuk gambar soal)
-  //   Text   DATA_REPO      akun-github-sekolah/cbt-data    (repo PRIVAT untuk cadangan soal & hasil)
-  //   Text   CF_ACCOUNT_ID  ID akun serverC sekolah          (untuk panel Penggunaan harian)
-  //   Secret GITHUB_TOKEN   token github_pat_…
-  //   Secret CF_API_TOKEN   token API serverC (opsional)
-  // keep_vars = true: setiap pemasangan ulang dari GitHub TIDAK menghapus/menimpa isian dashboard di atas,
+  // Variabel tiap sekolah dibuat OTOMATIS di serverC (Settings → Variables and Secrets) saat
+  // pemasangan pertama, oleh berkas pasang-variabel.mjs:
+  //   CF_API_TOKEN, DATA_REPO, GITHUB_TOKEN, MEDIA_REPO  → masih kosong, admin tinggal mengisi nilainya
+  //   APP_KUNCI                                         → kunci link, sudah terisi
+  // Nama yang sudah ada tidak pernah diubah/ditimpa. Nilainya TIDAK ditulis di berkas ini.
+  // (CF_ACCOUNT_ID tidak perlu, kecuali token API serverC bisa membuka lebih dari satu akun.)
+  "build": { "command": "node pasang-variabel.mjs" },
+
+  // keep_vars = true: setiap pemasangan ulang dari GitHub TIDAK menghapus/menimpa isian dashboard,
   // jadi berkas repo ini aman diunggah ke repo sekolah mana pun.
   "keep_vars": true,
   "vars": {

@@ -1,6 +1,7 @@
 // Uji sakelar "Kunci link" (versi 2.14): halaman ujian siswa hanya untuk aplikasi CBT Ujian, bisa dimatikan/dinyalakan admin.
 // Jalankan dengan wrangler dev --var DEV_MODE:1 --var APP_KUNCI:kunciuji   (TANPA=1: tanpa APP_KUNCI)
 const BASE = process.env.BASE || 'http://127.0.0.1:8787', WSB = BASE.replace(/^http/, 'ws'), TANPA = process.env.TANPA === '1';
+const KUNCI = 'kunciuji';
 let fails = 0;
 const ok = (n, c, info) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c ? '' : '  ' + JSON.stringify(info).slice(0, 300))); if (!c) fails++; };
 function soket() {
@@ -29,7 +30,7 @@ if (TANPA) {
   let st = (await s.rpc('statusSistem', {}, A)).data;
   ok('awal: terpasang & aktif', st.kunciLink.terpasang && st.kunciLink.aktif, st.kunciLink);
   ok('browser biasa → 404', await halaman() === 404);
-  ok('aplikasi CBT Ujian (UA berisi kunci) → 200', await halaman('Mozilla/5.0 CBTUjian k/kunciuji') === 200);
+  ok('aplikasi CBT Ujian (UA berisi kunci) → 200', await halaman('Mozilla/5.0 CBTUjian k/' + KUNCI) === 200);
   let r = await s.rpc('aturKunciLink', { aktif: false }, G);
   ok('guru biasa tidak boleh mengubah sakelar', !r.ok, r);
   r = await s.rpc('aturKunciLink', { aktif: false }, A);
@@ -38,12 +39,12 @@ if (TANPA) {
   ok('status sekarang: mati', st.kunciLink.aktif === false, st.kunciLink);
   await tunggu(31000);
   ok('±30 detik kemudian: browser biasa bisa membuka halaman ujian (200)', await halaman() === 200);
-  ok('aplikasi CBT Ujian tetap bisa (200)', await halaman('Mozilla/5.0 CBTUjian k/kunciuji') === 200);
+  ok('aplikasi CBT Ujian tetap bisa (200)', await halaman('Mozilla/5.0 CBTUjian k/' + KUNCI) === 200);
   r = await s.rpc('aturKunciLink', { aktif: true }, A);
   ok('admin menyalakan lagi', r.ok && r.data.aktif === true, r);
   await tunggu(31000);
   ok('±30 detik kemudian: browser biasa kembali 404', await halaman() === 404);
-  ok('aplikasi CBT Ujian tetap 200', await halaman('Mozilla/5.0 CBTUjian k/kunciuji') === 200);
+  ok('aplikasi CBT Ujian tetap 200', await halaman('Mozilla/5.0 CBTUjian k/' + KUNCI) === 200);
   const res = await (await fetch(BASE + '/ujian-cbt/', { headers: { 'user-agent': 'Mozilla/5.0' } })).text();
   ok('jawaban 404 tidak menyebut nama rahasia', !/APP_KUNCI/i.test(res));
 }

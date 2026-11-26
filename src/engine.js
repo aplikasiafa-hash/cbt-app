@@ -119,7 +119,12 @@ export class Engine extends DurableObject {
     super(ctx, env);
     // nilai contoh "namaakun/…" di wrangler.jsonc dianggap belum diatur
     const repo = v => (v && !/^namaakun\//i.test(String(v).trim())) ? String(v).trim() : '';
-    this.env = { ...env, MEDIA_REPO: repo(env.MEDIA_REPO), DATA_REPO: repo(env.DATA_REPO) };
+    // Isian dari serverC (Settings → Variables and Secrets). Nama yang dibuat otomatis saat pemasangan
+    // pertama masih kosong (atau "-") → dianggap belum diisi.
+    const isi = v => { const x = String(v == null ? '' : v).trim(); return x === '-' ? '' : x; };
+    this.env = { ...env, MEDIA_REPO: repo(isi(env.MEDIA_REPO)), DATA_REPO: repo(isi(env.DATA_REPO)),
+      GITHUB_TOKEN: isi(env.GITHUB_TOKEN), CF_API_TOKEN: isi(env.CF_API_TOKEN), CF_ACCOUNT_ID: isi(env.CF_ACCOUNT_ID),
+      APP_KUNCI: X.kunciLinkDari(env) };
     this.repoContoh = /^namaakun\//i.test(env.MEDIA_REPO || '') || /^namaakun\//i.test(env.DATA_REPO || '');
     this.sql = ctx.storage.sql;
     if (env.DEV_MODE === '1') pasangUkur(this);   // uji lokal: hitung baris dibaca/ditulis (D1 & penyimpanan internal)
@@ -983,7 +988,7 @@ export class Engine extends DurableObject {
           const r = await DB.prepare(`SELECT nis, data FROM hasil WHERE ujian_id = ?`).bind(id).all();
           for (const x of r.results) arsip.peserta[x.nis] = await X.bukaData(x.data);
         }
-        files['hasil/' + id + '.json'] = JSON.stringify(arsip);
+        files['hasil/' + id + '.json'] = (!u || !Object.keys(arsip.peserta).length) ? null : JSON.stringify(arsip);   // kosong → hapus berkas
       }
     }
     const sha = keys.length ? await commitFiles(this.env, repo, files, 'Cadangan CBT: ' + keys.length + ' berkas') : null;
@@ -1900,6 +1905,55 @@ A.statusSistem = async function (d, me) {
     ukuranDb: await ukuranD1(this.env.DB), batasDb: 500 * 1024 * 1024,
     kunciLink: { terpasang: !!this.env.APP_KUNCI, aktif: !!this.env.APP_KUNCI && await kunciLinkAktif(this.env.DB) }
   };
+};
+/** Admin: jumlah hasil ujian tersimpan (dipanggil hanya saat jendela "Bersihkan hasil ujian" dibuka). */
+A.jumlahHasil = async function (d, me) {
+  X.reqAdmin_(me);
+  const r = (await this.env.DB.prepare(`SELECT ujian_id AS id, COUNT(*) AS n FROM hasil GROUP BY ujian_id`).all()).results;
+  return { hasil: r.reduce((a, x) => a + x.n, 0), ujian: r.length, jadwal: this.ujian.size };
+};
+/** Admin: bersihkan hasil ujian (nilai & jawaban semua siswa) supaya jadwal/ujian bisa dipakai lagi.
+ *  Data siswa, guru, bank soal, dan pengaturan TIDAK dihapus. Wajib kata sandi admin. */
+A.bersihkanHasil = async function (d, me) {
+  X.reqAdmin_(me);
+  const k = 'bersih:' + me.id;
+  cekGagal(this, k);
+  const g = this.guru.get(me.id);
+  if (!g || !(await X.cekPw_(g, d.sandi))) { catatGagal(this, k); throw new AppError('Kata sandi salah', 'SANDI'); }
+  return this.kunci(async () => {
+    const t = now();
+    for (const L of this.L.values()) if (this.adaYangMengerjakan(L, t)) {
+      const u = this.ujian.get(L.id);
+      throw new AppError('Masih ada siswa yang sedang mengerjakan ' + (u ? '"' + u.nama + '"' : 'ujian') + '. Bersihkan setelah semua siswa selesai.', 'ADA_PESERTA');
+    }
+    const DB = this.env.DB;
+    this.flushJw(); await this.syncD1();   // hasil yang belum tersimpan ikut terhitung
+    const per = (await DB.prepare(`SELECT ujian_id AS id, COUNT(*) AS n FROM hasil GROUP BY ujian_id`).all()).results;
+    const n = per.reduce((a, x) => a + x.n, 0), idHasil = per.map(r => r.id);
+    // sesi ujian di mesin ujian: tutup koneksi, kosongkan penyimpanan internal
+    for (const L of this.L.values()) {
+      for (const ws of [...L.mons]) { kirim(ws, { t: 'err', k: 'pantau', code: 'ERR', msg: 'Hasil ujian sudah dibersihkan admin' }); this.akhiriIkatan(ws, 1000, 'dibersihkan'); }
+      for (const set of [...L.socks.values()]) for (const ws of [...set]) { kirim(ws, { t: 'reset' }); this.akhiriIkatan(ws, 1000, 'dibersihkan'); }
+    }
+    this.L.clear();
+    this.sql.exec(`DELETE FROM p`); this.sql.exec(`DELETE FROM jw`);
+    await DB.prepare(`DELETE FROM hasil`).run();
+    let jadwal = 0;
+    const idArsip = new Set([...Object.keys(this.ghHasil || {}), ...idHasil, ...this.ujian.keys()]);
+    if (d.hapusJadwal) {
+      jadwal = this.ujian.size;
+      await DB.prepare(`DELETE FROM ujian`).run();
+      this.ujian.clear();
+      this.tandaiCadangan('ujian');
+    }
+    // salinan hasil di serverB ikut dibersihkan (dihapus pada pengiriman cadangan berikutnya)
+    this.ghHasil = {}; this.metaSet('ghHasil', '{}'); this.ghMem = null;
+    for (const id of [...this.bdirty]) if (id.startsWith('hasil:')) this.bdirty.delete(id);
+    if (this.ghSiap()) for (const id of idArsip) this.tandaiCadangan('hasil:' + id);
+    this.metaSet('bdirty', JSON.stringify([...this.bdirty]));
+    this.pasangAlarm().catch(() => {});
+    return { hasil: n, jadwal };
+  });
 };
 /** Kunci link: halaman ujian siswa hanya bisa dibuka lewat aplikasi CBT Ujian. Sakelar ini menyalakan/mematikan
  *  gerbangnya tanpa menghapus rahasia di server. Berlaku di semua server dalam ±30 detik (cache Worker). */

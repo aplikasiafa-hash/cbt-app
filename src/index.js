@@ -13,7 +13,7 @@
 import { Engine } from './engine.js';
 import {
   VERSI, TOKEN_GURU_JAM, CONFIG_DEFAULT, AppError, errInfo, now, setOffset,
-  str_, cekPw_, signToken_, verifyToken_
+  str_, cekPw_, signToken_, verifyToken_, kunciLinkDari
 } from './shared.js';
 
 export { Engine };
@@ -138,14 +138,20 @@ export default {
       return engine(env).fetch(req);
     }
     // Halaman ujian HANYA boleh dibuka dari aplikasi CBT Ujian (.apk/.exe). Aplikasi menyisipkan
-    // kunci rahasia (APP_KUNCI) ke User-Agent; browser biasa tidak punya → dijawab 404.
-    // Kunci diatur sebagai rahasia Worker (wrangler secret put APP_KUNCI) DAN disatukan ke aplikasi saat dibangun.
-    // Bila APP_KUNCI tidak diatur, gerbang MATI (halaman terbuka seperti biasa) agar tidak mengunci diri sendiri.
-    // Admin juga bisa mematikan/menyalakan gerbang dari Pengaturan → "Kunci link" tanpa menghapus rahasianya.
+    // kunci link ke User-Agent; browser biasa tidak punya → dijawab 404. Kunci link diisi di serverC
+    // (APP_KUNCI); kosong = gerbang mati. Admin bisa mematikan/menyalakan gerbang dari Pengaturan → "Kunci link".
     if (p === '/ujian-cbt' || url.pathname.startsWith('/ujian-cbt/')) {
-      if (env.APP_KUNCI && !(req.headers.get('user-agent') || '').includes('k/' + env.APP_KUNCI) && await kunciLinkAktif(env)) {
+      const kunci = kunciLinkDari(env), ua = req.headers.get('user-agent') || '';
+      if (kunci && !ua.includes('k/' + kunci) && await kunciLinkAktif(env)) {
         let body = 'Tidak ditemukan';
         try { body = await (await env.ASSETS.fetch(new URL('/404.html', url))).text(); } catch (e) {}
+        if (/CBTUjian/i.test(ua)) {
+          // dibuka dari aplikasi CBT Ujian, tetapi kunci link-nya tidak sama → beri tahu penyebabnya
+          const kode = /\bk\/\S/.test(ua) ? 'K1' : 'K0';
+          const sebab = kode === 'K0' ? 'Aplikasi ini dibangun tanpa kunci link.' : 'Kunci link di aplikasi ini berbeda dengan kunci link server.';
+          body = body.replace(/<p>[\s\S]*?<\/p>/, '<p>Aplikasi CBT Ujian ini belum cocok dengan server sekolah. ' + sebab +
+            '</p><p>Minta admin membangun ulang aplikasi dengan kunci link server ini, atau mematikan <b>Kunci link</b> di Pengaturan.</p><p style="color:#8A97A5;font-size:13px">Kode ' + kode + '</p>');
+        }
         return new Response(body, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'vary': 'User-Agent' } });
       }
       const r = await env.ASSETS.fetch(req);

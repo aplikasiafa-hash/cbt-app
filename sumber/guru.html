@@ -1393,8 +1393,27 @@ fieldset.fs-polos:disabled{opacity:.78;pointer-events:none}   /* tautan & tombol
         <button class="btn" @click="sinkron" :disabled="sibukSync">{{ sibukSync ? 'Mengirim…' : (st && st.adaB ? 'Kirim ke serverB sekarang' : 'Simpan semua hasil sekarang') }}</button>
         <button class="btn" @click="impor" :disabled="sibukSync" v-if="st && st.adaB">Impor data dari serverB…</button>
         <button class="btn" @click="muatUlangData" :disabled="sibukSync" title="Hanya perlu bila data di serverC diubah di luar aplikasi">Muat ulang data dari serverC</button>
+        <button class="btn btn-danger" @click="bukaBersih" :disabled="sibukSync">Bersihkan hasil ujian…</button>
       </div>
       <p class="small muted" style="margin-top:12px" v-if="versi">Versi {{ versi }}</p>
+    </div>
+
+    <div class="modal-bg" v-if="bersih" @click.self="bersih=null">
+      <form class="modal" @submit.prevent="jalankanBersih">
+        <div class="modal-head"><div><h2>Bersihkan hasil ujian</h2></div><button type="button" class="x" @click="bersih=null">×</button></div>
+        <div class="modal-body">
+          <p style="margin-top:0">Nilai dan jawaban <b>semua siswa</b> dihapus dari database<template v-if="bersih.jml"> (<b>{{ bersih.jml.hasil.toLocaleString('id-ID') }}</b> hasil dari {{ bersih.jml.ujian }} ujian)</template>, termasuk salinannya di serverB. Setelah itu jadwal bisa dipakai lagi untuk ujian berikutnya.</p>
+          <p class="small" style="margin:0 0 12px"><b>Tidak dihapus:</b> data siswa, data guru, bank soal, dan pengaturan.</p>
+          <p class="small muted" style="margin:0 0 14px">Unduh dulu rekap nilai di menu <b>Hasil &amp; koreksi</b> bila masih diperlukan. Tidak bisa dibatalkan.</p>
+          <label class="check" style="margin-bottom:12px"><input type="checkbox" v-model="bersih.jadwal"><span>Hapus juga semua jadwal ujian<template v-if="bersih.jml"> ({{ bersih.jml.jadwal }} jadwal)</template><br><small class="muted">Biarkan tidak dicentang bila jadwal ingin dipakai lagi.</small></span></label>
+          <label class="field"><span>Kata sandi Anda (untuk konfirmasi)</span><input-sandi v-model="bersih.sandi" autocomplete="current-password" required></input-sandi></label>
+          <p class="small" style="color:var(--merah);margin:6px 0 0" v-if="bersih.galat">{{ bersih.galat }}</p>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" @click="bersih=null">Batal</button>
+          <button class="btn btn-danger" :disabled="bersih.sibuk || !bersih.sandi">{{ bersih.sibuk ? 'Membersihkan…' : 'Bersihkan hasil' }}</button>
+        </div>
+      </form>
     </div>
 
     <div class="modal-bg" v-if="imp" @click.self="imp=null">
@@ -1657,7 +1676,7 @@ Sok.aturWaktu = n => { S.offset = n - Date.now(); };
 // sehingga data terbaru langsung terlihat. Tombol "Muat ulang"/"Perbarui" selalu mengambil langsung dari server.
 const BACA_SIMPAN = { ping: 86400, getConfig: 600, dashboard: 60, listBank: 60, listUjian: 45, listGuru: 300, listSiswa: 180, tokenUjian: 20, waktuSelesai: 300, statusSistem: 60, pemakaianHarian: 300 };
 // selalu segar: isi bank soal & status kuncinya (bisa diubah admin dari perangkat lain), monitoring, hasil, kata sandi
-const BACA_SAJA = new Set(['getBank', 'monitorUjian', 'hasilUjian', 'sandiSiswa', 'sandiGuru', 'loginGuru']);
+const BACA_SAJA = new Set(['getBank', 'monitorUjian', 'hasilUjian', 'sandiSiswa', 'sandiGuru', 'loginGuru', 'jumlahHasil']);
 const sedangJalan = new Map();
 const kunciSimpan = (action, data) => 'cbt_gc:' + ((S.user && S.user.id) || '-') + ':' + action + ':' + JSON.stringify(data || {});
 function bacaSimpan(k, detik) { try { const o = JSON.parse(localStorage.getItem(k) || 'null'); if (o && Date.now() - o.t < detik * 1000) return o.d; } catch (e) {} return undefined; }
@@ -3514,7 +3533,7 @@ function barisPakai(b, nilai, batas) {
 
 app.component('v-pengaturan', {
   template: '#t-pengaturan',
-  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), asli: '', sibuk: false, sibukSync: false, versi: '', st: null, imp: null, pk: { r: null, muat: false, galat: '' }, pakaiSiap: localStorage.getItem('cbt_pakai_siap') === '1', sibukKunci: false }),
+  data: () => ({ c: JSON.parse(JSON.stringify(S.config)), asli: '', sibuk: false, sibukSync: false, versi: '', st: null, imp: null, bersih: null, pk: { r: null, muat: false, galat: '' }, pakaiSiap: localStorage.getItem('cbt_pakai_siap') === '1', sibukKunci: false }),
   computed: {
     // panel disembunyikan bila serverC belum diberi token API (tidak ada petunjuk/teks pemasangan di aplikasi)
     tampilPakai() { return this.pk.r ? !(this.pk.r.siap === false && this.pk.r.alasan === 'token') : (this.pakaiSiap || !!this.pk.galat); },
@@ -3553,6 +3572,21 @@ app.component('v-pengaturan', {
       catch (e) { toast(e.message, 'err'); } finally { this.sibukKunci = false; }
     },
     /** hanya angka penggunaan harian yang dimuat ulang (bukan seluruh halaman) */
+    bukaBersih() {
+      this.bersih = { sandi: '', jadwal: false, sibuk: false, galat: '', jml: null };
+      api('jumlahHasil').then(r => { if (this.bersih) this.bersih.jml = r; }).catch(() => {});
+    },
+    async jalankanBersih() {
+      const b = this.bersih; if (!b || b.sibuk) return;
+      b.sibuk = true; b.galat = '';
+      try {
+        const r = await api('bersihkanHasil', { sandi: b.sandi, hapusJadwal: b.jadwal });
+        this.bersih = null;
+        toast(r.hasil.toLocaleString('id-ID') + ' hasil ujian dibersihkan' + (r.jadwal ? ', ' + r.jadwal + ' jadwal dihapus' : '') + '. Data siswa, guru, dan bank soal tetap.', 'ok', 6000);
+        this.muatStatus(true);
+      } catch (e) { b.galat = e.message; b.sandi = ''; }
+      finally { if (this.bersih) this.bersih.sibuk = false; }
+    },
     async muatPakai(segar) {
       if (this.pk.muat) return;
       this.pk.muat = true; this.pk.galat = '';

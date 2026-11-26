@@ -597,7 +597,16 @@ const AppUjian = (() => {
   };
 })();
 // halaman ujian tetap bisa dibuka tanpa internet (salinan halaman & pustaka di perangkat)
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Salinan halaman diambil oleh halaman ini (membawa tanda aplikasi CBT Ujian), paling banyak sekali sehari.
+  try {
+    const hari = new Date().toISOString().slice(0, 10);
+    if (window.caches && localStorage.getItem('cbt_salinan') !== hari)
+      caches.open('cbt-ujian-v1').then(c => c.add(new URL('./', location.href).href))
+        .then(() => { try { localStorage.setItem('cbt_salinan', hari); } catch (e) {} }).catch(() => {});
+  } catch (e) {}
+}
 const dtf = o => new Intl.DateTimeFormat('id-ID', o);
 const fmtJam = ms => ms ? dtf({ hour: '2-digit', minute: '2-digit' }).format(ms) : '';
 const fmtHari = ms => ms ? dtf({ weekday: 'long', day: 'numeric', month: 'long' }).format(ms) : '';

@@ -3,7 +3,7 @@
  * Logika penilaian, pengacakan, dan pembersihan soal sama dengan versi Apps Script.
  */
 
-export const VERSI = '2.18.0-CBT';
+export const VERSI = '2.19.1-CBT';
 export const GRACE_MS = 2 * 60 * 1000;          // toleransi keterlambatan kirim jawaban
 export const TOKEN_GURU_JAM = 12;
 export const TOKEN_SISWA_JAM = 16;              // cukup untuk 1 hari ujian (beberapa sesi) tanpa login ulang
@@ -93,6 +93,12 @@ export async function bacaSandi_(u, secret, bawaan, oleh) {
 export const sandiDariExcel_ = v => { const t = String(v || '').trim(); return /^\(/.test(t) ? '' : t; };
 
 export async function makeCred_(pw) { const salt = uid_(''); return { salt, hash: await hashPw_(String(pw), salt) }; }
+/** Kunci link hanya dari serverC (Settings → Variables and Secrets). Kosong atau "-" → gerbang mati,
+ *  jadi server tidak pernah mengunci diri sendiri. Spasi/enter yang ikut tertempel diabaikan. */
+export function kunciLinkDari(env) {
+  const k = String((env && env.APP_KUNCI) || '').trim();
+  return k && k !== '-' ? k : '';
+}
 export async function cekPw_(user, pw) { return !!(user && user.salt && user.hash === await hashPw_(String(pw), user.salt)); }
 
 // ---------------------------------------------------------------------------
